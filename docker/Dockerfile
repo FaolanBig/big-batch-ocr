@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
 
 #RUN snap install jbig2enc --edge
 
-RUN git -c http.sslVerify=false clone https://github.com/agl/jbig2enc.git /tmp/jbig2enc && \
+RUN git clone https://github.com/agl/jbig2enc.git /tmp/jbig2enc && \
     cd /tmp/jbig2enc && \
     ./autogen.sh && \
     ./configure && \
