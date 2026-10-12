@@ -8,7 +8,7 @@ The script follows a clear linear execution path:
 2. validate arguments and dependencies
 3. normalize source and target paths
 4. create the target state directory
-5. verify tmux runtime and create progress/log panes
+5. set up the runtime UI (tmux panes for native runs; no tmux in Docker)
 6. scan source directory for files
 7. copy non-PDF files
 8. process PDF files one by one
@@ -26,7 +26,7 @@ if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
 fi
 ```
 
-It checks for required command-line tools and immediately exits on the first missing requirement. It then normalizes both paths; the source must exist and the target is created if necessary.
+It checks for required command-line tools and immediately exits on the first missing requirement.
 
 It then resolves both paths so comparisons are robust and consistent:
 
@@ -61,7 +61,7 @@ It creates a run ID:
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 ```
 
-Then it creates three files in `/tmp`:
+For a native run, it creates three files in `/tmp`:
 
 - `ocr_status_<run-id>`
 - `ocr_output_<run-id>.log`
@@ -410,4 +410,4 @@ This is a deliberate operational choice: long-running OCR batches are more usefu
 
 ## Summary
 
-The execution flow is intentionally conservative and publication-safe. It first preserves non-PDF files, then handles PDFs in a resumable, stateful manner. The script ensures that users can monitor both progress and detailed OCR output in real time, even while the job is still running.
+The execution flow is intentionally conservative and publication-safe. It first preserves non-PDF files, then handles PDFs in a resumable, stateful manner. Native runs provide live progress and OCR-log panes in tmux; Docker runs stream script messages to the terminal and retain OCRmyPDF output in the configured log directory.

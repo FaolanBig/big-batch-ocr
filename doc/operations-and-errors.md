@@ -72,7 +72,7 @@ The error log captures all non-success conditions, including:
 
 - failed copy operations
 - failed OCR runs
-- missing or unreadable marker files
+- unreadable completion markers (these generate a warning and trigger reprocessing)
 - interrupted signals
 - invalid output publication
 
