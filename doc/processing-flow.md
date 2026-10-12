@@ -18,7 +18,7 @@ This is a batch job rather than a streaming pipeline: each pass is completed bef
 
 ## Step 1: startup and validation
 
-At startup, the script requires exactly two arguments: a source directory and a target directory.
+At startup, the native script requires non-empty source and target directory arguments. Pass these as the only two arguments; additional arguments are not used.
 
 ```bash
 if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
@@ -26,7 +26,7 @@ if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
 fi
 ```
 
-It checks for the required command-line tools and immediately exits on the first missing requirement.
+It checks for required command-line tools and immediately exits on the first missing requirement. It then normalizes both paths; the source must exist and the target is created if necessary.
 
 It then resolves both paths so comparisons are robust and consistent:
 
@@ -43,9 +43,11 @@ The script rejects several invalid layouts:
 
 This is a strong guardrail because copy-and-OCR processes should not mutate a directory tree that they are also scanning.
 
-## Step 2: tmux setup and runtime environment
+## Step 2: runtime setup
 
-The script requires `TMUX` to be present:
+The native script requires an existing tmux session and creates progress and log panes. The Docker entry point runs without tmux and writes logs under the destination's `.ocr_sequencial_state/logs` directory by default (`LOG_DIR` can override this).
+
+For native runs, the script requires `TMUX` to be present:
 
 ```bash
 if [[ -z "${TMUX:-}" ]]; then
@@ -107,7 +109,7 @@ for file in "${ALL_FILES[@]}"; do
 done
 ```
 
-This means the script treats a file as a PDF if its final extension is `.pdf` in a case-insensitive match. No attempt is made to validate the actual PDF signature at this stage.
+This means the script treats a file as a PDF if its final extension is `.pdf` in a case-insensitive match. No attempt is made to validate the actual PDF signature at this stage. The Docker entry point uses the same file discovery and classification logic.
 
 The counts are then computed:
 
@@ -299,6 +301,8 @@ The options do the following:
 - `--skip-text`: skip pages already containing text
 - `--jobs`: configure parallelism inside OCRmyPDF
 
+The native script derives `CPU_THREADS` as 75% of the logical CPU count and does not currently use the `OCR_JOBS` environment variable. The Docker entry point accepts `OCR_JOBS` as an override and uses the same default when it is unset.
+
 This is a strong cleanup-and-optimization workflow intended for scanned document processing.
 
 ## Step 8: publish output only after success
@@ -311,7 +315,7 @@ CURRENT_TMP="$tmp_out"
 CURRENT_MARKER_TMP="$marker_tmp"
 ```
 
-Only after OCRmyPDF returns success does it attempt to move the output into place:
+Only after OCRmyPDF returns success does it move the temporary output into place. It then writes the source signature to a temporary marker and moves that marker into place:
 
 ```bash
 if mv -f -- "$tmp_out" "$out"; then
@@ -322,7 +326,7 @@ if mv -f -- "$tmp_out" "$out"; then
         echo "[SUCCESS] completed OCR for $pdf"
 ```
 
-This ensures that the final PDF is replaced only after the OCR output has been successfully generated and the state marker has been recorded.
+The output is published before the marker. If publishing the output fails, the PDF is counted as failed. If writing or publishing the marker fails, the output remains but the PDF is still counted as failed; because it has no matching marker, a later run reprocesses it.
 
 ## Step 9: failure handling within the PDF loop
 

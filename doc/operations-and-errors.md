@@ -38,11 +38,11 @@ ETA:              38s
 Current file:     archive/scan_007.pdf
 ```
 
-The status file is consumed by the tmux progress pane, which clears the screen and prints its latest content once per second.
+For native runs, the status file is consumed by a tmux progress pane, which clears the screen and prints its latest content once per second. The Docker entry point also maintains this status file, but does not display a progress pane.
 
 ## Log management
 
-The script maintains two logs:
+Both entry points maintain two logs:
 
 - `OCR_LOG`: receipt of OCRmyPDF output and per-file start markers
 - `ERROR_LOG`: warnings, errors, interruption notices, and failed operations
@@ -78,6 +78,8 @@ The error log captures all non-success conditions, including:
 
 The final job status prints both log paths at the end of the run.
 
+For the native script, both logs are stored in `/tmp` and remain there after the run. The Docker script stores them in `$LOG_DIR`, which defaults to `<target>/.ocr_sequencial_state/logs`, so they persist with the mounted output. In Docker, script output is also streamed to the terminal and appended to the OCR log.
+
 ## Temporary files and cleanup
 
 The script creates temporary files in several contexts:
@@ -95,7 +97,7 @@ This coverage includes:
 - `CURRENT_MARKER_TMP`
 - `STATUS_FILE`
 - `FILE_LIST_TMP`
-- tmux panes
+- tmux panes in native runs
 
 The script also removes any temp file it created if a copy or OCR step fails.
 
@@ -169,10 +171,10 @@ This operational model is useful for long-running OCR jobs because it provides:
 
 ## Limitations and caveats
 
-The script makes several assumptions that are important to understand:
+The native script makes several assumptions that are important to understand:
 
 - it is designed for a POSIX-like Linux environment
-- it depends on tmux being active, so it is not a plain command-line utility in the usual sense
+- it depends on tmux being active; the Docker entry point does not
 - it heavily assumes `ocrmypdf` is installed and configured correctly
 - it only checks file-extension suffixes to decide what is a PDF
 - it uses a hidden `.ocr_sequencial_state` directory as the resume store, so deleting it forces reprocessing of PDFs

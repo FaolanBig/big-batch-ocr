@@ -2,7 +2,7 @@
 
 ## File-level structure
 
-The script is organized into a compact but layered structure:
+The native script is organized into a compact but layered structure:
 
 1. shell options and global state
 2. helper functions
@@ -13,7 +13,7 @@ The script is organized into a compact but layered structure:
 7. PDF OCR pass
 8. final summary and exit status
 
-At a high level, the script is a single Bash program with procedural control flow rather than a modular library or service-oriented architecture.
+At a high level, each entry point is a single Bash program with procedural control flow rather than a modular library or service-oriented architecture. The native entry point adds tmux panes for progress and OCR output; the Docker entry point writes its logs to the mounted destination and runs without tmux.
 
 ## Global configuration and runtime variables
 
@@ -44,7 +44,7 @@ These variables serve as the global runtime state for the entire batch.
 - `PROGRESS_PANE`: tmux pane ID for the progress display.
 - `LOG_PANE`: tmux pane ID for the log display.
 
-Later the script creates additional runtime variables such as:
+Later the native script creates additional runtime variables such as:
 
 - `RUN_ID`
 - `STATUS_FILE`
@@ -143,7 +143,7 @@ Then it exits with the appropriate code:
 
 ## Signal handling model
 
-The script installs traps for process termination:
+The native script installs traps for process termination:
 
 ```bash
 trap 'handle_signal INT 130' INT
@@ -151,15 +151,15 @@ trap 'handle_signal TERM 143' TERM
 trap 'handle_signal HUP 129' HUP
 ```
 
-This allows the script to register a clear interruption record instead of silently terminating in the middle of a file. The cleanup trap still runs on exit, which removes UI panes and temporary files.
+This allows the script to register a clear interruption record instead of silently terminating in the middle of a file. The cleanup trap still runs on exit, which removes UI panes and temporary files. The Docker entry point also handles these signals, but has no panes to remove.
 
 ## Validation stage
 
-Before doing any real work, the script validates conditions in this order:
+Before doing any real work, the native script validates conditions in this order:
 
 1. both command-line arguments are provided
 2. required commands exist
-3. input and output directories are valid absolute paths
+3. input and output paths are normalized
 4. source and target are not identical
 5. target is not inside source
 6. target directory is created
@@ -176,6 +176,8 @@ It explicitly checks for:
 - `sha256sum`
 - `cmp`
 
+The script also uses `find`, `nproc`, and other common GNU/Linux utilities. `nproc` is used to calculate the default OCRmyPDF job count, although it is not part of the explicit dependency checks.
+
 The command validation is intentionally strict, and each missing binary causes a hard exit.
 
 ## Directory normalization
@@ -191,13 +193,13 @@ This ensures consistent path comparisons and prevents accidental path confusion 
 
 ## CPU thread configuration
 
-The script sets:
+The native script sets:
 
 ```bash
-export CPU_THREADS="$(($(nproc --all) / 4 * 3))"
+export CPU_THREADS="$(($(nproc --all) * 3 / 4))"
 ```
 
-The intended meaning is to use roughly 75% of the machine’s total logical CPU count. The previous `OCR_JOBS` configuration lines are commented out, so the active implementation uses the derived value unconditionally.
+This uses roughly 75% of the machine’s total logical CPU count. The native script does not currently read `OCR_JOBS`; its job count is derived unconditionally from `nproc --all`.
 
 That value is passed to OCRmyPDF via:
 
@@ -206,6 +208,8 @@ That value is passed to OCRmyPDF via:
 ```
 
 This is a process-level concurrency setting inside OCRmyPDF, not a loop-level parallelism setting for this script itself.
+
+The Docker entry point differs here: it uses `OCR_JOBS` when set, and otherwise uses the same 75%-of-logical-CPUs default. It rejects a non-positive or non-integer value.
 
 ## File list generation
 
@@ -243,4 +247,4 @@ This design is important because it decouples the produce-and-validate step from
 
 ## Summary
 
-The script’s architecture is intentionally straightforward: it is a controlled Bash workflow that performs one sequential batch process with careful file publication, tmux UI updates, and resumable PDF verification. Its operating model is dominated by safety and retryability rather than raw throughput.
+The architecture is intentionally straightforward: both entry points perform one sequential batch process with careful file publication and resumable PDF verification. Native execution adds tmux UI updates; container execution writes its output and error logs under `.ocr_sequencial_state/logs` by default (configurable with `LOG_DIR`). Neither entry point parallelizes files, though OCRmyPDF can use multiple jobs within each PDF.

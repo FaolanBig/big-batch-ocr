@@ -1,116 +1,51 @@
 # Script overview
 
-## Scope and purpose
+## Supported entry points
 
-The script in [src/ocr_sequencial.sh](../src/ocr_sequencial.sh) is a batch OCR workflow for directory trees. It was designed to process a large source tree without requiring the user to manually watch each file and without losing safety guarantees when writing output.
+The current native workflow is implemented in [`src/ocr_sequencial.sh`](../src/ocr_sequencial.sh). The Docker image runs [`docker/ocr_sequencial_docker.sh`](../docker/ocr_sequencial_docker.sh), a container-oriented variant of the same workflow. [`src/ocr.sh`](../src/ocr.sh) is deprecated.
 
-Its responsibilities are:
+Both current entry points recursively scan a source directory, preserve relative paths in the target, copy non-PDF files, and OCR PDF files one at a time with OCRmyPDF. They publish copied and OCR-processed files from temporary paths, record per-PDF completion markers, continue after per-file failures, and return a nonzero status if any file fails.
 
-- validate input paths and required tools
-- ensure the script is run from within tmux
-- scan the source tree for files
-- copy non-PDF files into the target directory while preserving structure
-- process PDF files one at a time with OCRmyPDF
-- write output to a temporary file before publishing it
-- record a state marker so already-processed PDFs can be skipped safely on subsequent runs
-- provide a live progress display and OCR logs in tmux panes
-- exit with clear success or failure conditions
+## Native execution
 
-The script is not a distributed OCR scheduler; it is a single-process, sequential pipeline with robust output publication and resume behavior.
-
-## Execution model
-
-The script starts by validating the arguments, required commands, and directory relationships. Then it creates a target state directory and opens two tmux panes:
-
-1. a progress pane that updates every second
-2. a log pane that follows the OCR log file in real time
-
-After the UI is created, the script enumerates every regular file under the source tree. It splits the results into two groups:
-
-- PDF files, identified by a case-insensitive `.pdf` suffix
-- all other files
-
-Then it performs two main passes:
-
-- first pass: copy non-PDF files
-- second pass: OCR PDF files
-
-This separation ensures that documents, images, and arbitrary files are preserved first, while OCR work is concentrated only on PDF inputs.
-
-## Operational assumptions
-
-The workflow assumes the following:
-
-- the user wants a mirrored target directory that keeps the same relative layout as the source tree
-- the source tree is treated as read-only while processing
-- destination files may be replaced when their source is newer or unverified
-- the target can be a fresh directory or an existing directory that already contains some prior output
-- failures should not abort the entire batch; the script records them and continues wherever possible
-
-## Safety model
-
-One of the central design goals is to avoid publishing partially written or corrupted files. The script uses temporary files for both file copies and OCR outputs:
-
-- copy: source file is copied to `${out}.copy-${RUN_ID}.tmp`, then moved to the final output path
-- OCR: PDF is OCR-processed to `${out}.ocr-${RUN_ID}.tmp.pdf`, then moved into place only after success
-
-This ensures that a process that fails midway does not leave a final destination file in a partially written state.
-
-## Readiness and idempotence
-
-The script is designed to be repeatable. It does not blindly re-run OCR for every PDF. Instead, it calculates a deterministic marker for each relative file path and stores a source signature based on:
-
-- the absolute relative path within the source tree
-- the SHA-256 checksum of the source PDF
-
-If the output file exists and the saved marker still matches the current source signature, the PDF is skipped. This gives the script an important resume-like behavior without requiring a full state database.
-
-## State directory
-
-The target directory gains a hidden metadata directory:
-
-```text
-<target_dir>/.ocr_sequencial_state
-```
-
-Inside it, the script stores one marker per processed PDF. The marker file name is derived from a SHA-256 hash of the relative path, which allows the script to avoid storing large path names while still providing a stable lookup key.
-
-## Why it runs under tmux
-
-The script intentionally refuses to run unless `TMUX` is set, meaning it must be started from an active tmux session. This is not arbitrary; it allows the script to create additional panes for:
-
-- showing progress and counters
-- following the OCR log in real time
-
-This makes the batch process usable as a background-like operation while still remaining observable from the same terminal session.
-
-## Important implementation note
-
-The script contains a set of commented-out environment-driven thread settings:
+The native script requires Bash, OCRmyPDF, tmux, and common Linux utilities. It must be launched from inside an existing tmux session. It creates a progress pane and a pane following the OCR log. Native OCR and error logs are created in `/tmp` and their paths are printed at the end of the run.
 
 ```bash
-#CPU_THREADS="${OCR_JOBS:-2}"
-#export CPU_THREADS="${OCR_JOBS:-2}"
-#export CPU_THREADS="${OCR_JOBS:-CPU_THREADS=$(($(nproc --all) / 2))}"
+tmux new -s ocr
+# In the tmux session:
+bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 ```
 
-The active code instead does:
+The native script sets OCRmyPDF's `--jobs` value to 75% of the logical CPU count reported by `nproc --all`. It currently does not honor the `OCR_JOBS` environment variable.
+
+## Docker execution
+
+The container runs automatically without tmux. Mount the source at `/source` and the destination at `/destination`; the container script uses these fixed paths. It writes logs under `<destination>/.ocr_sequencial_state/logs` by default. Set `LOG_DIR` to select a different log directory.
 
 ```bash
-export CPU_THREADS="$(($(nproc --all) / 4 * 3))"
+docker run --rm -it \
+  -v /path/to/source:/source:ro \
+  -v /path/to/target:/destination \
+  -e OCR_JOBS=4 \
+  ghcr.io/faolanbig/big-batch-ocr:<tag>
 ```
 
-That means the script currently uses roughly 75% of available logical CPUs when invoking OCRmyPDF with `--jobs`. The repository README may mention a different default behavior, but the actual file as implemented is authoritative.
+The Docker entry point honors a positive-integer `OCR_JOBS` value and defaults to 75% of the logical CPU count when it is unset.
 
-## Success and failure semantics
+## File handling and resume behavior
 
-On exit, the script reports one of two outcomes:
+PDFs are identified by a case-insensitive `.pdf` suffix; file contents are not checked during discovery. All other regular files are copied. Existing non-PDF outputs are skipped when `cmp` finds identical contents. Otherwise, they are copied to a temporary destination file and moved into place.
 
-- success: no failed PDFs and no failed other-file copies
-- failure: at least one PDF or non-PDF failed during the run
+For each PDF, the script calculates a SHA-256 checksum of the source and checks for both an output PDF and a completion marker matching the source path and checksum. A match skips OCR. Missing, unreadable, or non-matching state causes the PDF to be processed again.
 
-A failed item does not stop the whole run; the script continues processing all remaining files before printing the final summary and exiting with status 1 if any errors were recorded.
+The state directory is `<target>/.ocr_sequencial_state`. Marker files are named using a hash of each PDF's source-relative path. OCR output is first written to a temporary file and moved to its destination only after OCRmyPDF succeeds. The marker is published after the output; if marker publication fails, the batch records a failure and a later run will process that PDF again.
 
-## Summary
+## Constraints and outcomes
 
-This script is best understood as a resilient, resumable OCR batch job with a user-facing progress dashboard. It is intentionally conservative about publishing output, uses file markers to avoid unnecessary reprocessing, and is structured to maximize visibility and debugging during a long-running job.
+- The source directory must exist; the target is created if necessary.
+- Source and target must differ, and the target must not be inside the source.
+- Processing is sequential across files, although OCRmyPDF may use multiple jobs for an individual PDF.
+- A failed item does not stop later items from being processed.
+- Exit status is `0` when all items succeed and `1` when one or more items fail. Signal interruptions use the corresponding conventional status (`129`, `130`, or `143`).
+
+See [architecture](./architecture.md), [processing flow](./processing-flow.md), [state and recovery](./state-and-recovery.md), and [operations and errors](./operations-and-errors.md) for details.
