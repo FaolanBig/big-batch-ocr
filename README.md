@@ -8,6 +8,10 @@ Use either the Bash script at `src/ocr_sequencial.sh` or the compiled binary at 
 
 `ocr_sequencial.sh` recursively processes a source directory and writes results to a target directory, preserving the directory structure. Non-PDF files are copied; PDF files are processed one at a time with OCRmyPDF.
 
+## Docker
+
+Prebuilt Docker images are published to [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr). See [Run OCR in Docker](doc/run_with_docker.md) for pull and run instructions.
+
 ## Quick Start
 
 Requirements: Bash, OCRmyPDF and its required OCR tools, and `tmux`. The usual GNU/Linux utilities `find`, `realpath`, `sha256sum`, `cmp`, `mktemp`, `cp`, `mv`, and `tail` must also be available. At startup, the script explicitly checks for `ocrmypdf`, `tmux`, `realpath`, `sha256sum`, and `cmp`.
