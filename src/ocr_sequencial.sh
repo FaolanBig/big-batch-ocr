@@ -141,7 +141,7 @@ TARGET_DIR="$(realpath -m "$TARGET_DIR")"
 #CPU_THREADS="${OCR_JOBS:-2}"
 #export CPU_THREADS="${OCR_JOBS:-2}"
 #export CPU_THREADS="${OCR_JOBS:-CPU_THREADS=$(($(nproc --all) / 2))}"
-export CPU_THREADS="$(($(nproc --all) * 3 / 4))"
+export CPU_THREADS="${OCR_JOBS:-$(($(nproc --all) * 3 / 4))}"
 
 
 [[ "$CPU_THREADS" =~ ^[1-9][0-9]*$ ]] \

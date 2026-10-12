@@ -46,7 +46,7 @@ The compiled binary is written to `bin/ocr_sequencial`. Build it on the platform
 
 3. Monitor progress in the tmux panes that open automatically. When processing is complete, exit the tmux session with `exit`.
 
-You can optionally set the number of OCRmyPDF worker threads. The default is 3/4 of the available cpu cores:
+You can optionally set the number of OCRmyPDF worker threads. The default is 3/4 of the logical CPU count reported by `nproc --all`:
 
 ```bash
 OCR_JOBS=4 bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
@@ -84,7 +84,7 @@ PDF files are processed one at a time. For each file, the script runs OCRmyPDF w
 - `--optimize 3` enables optimization level 3.
 - `--output-type pdf` specifies the output format.
 - `--skip-text` skips pages that already contain text.
-- `--jobs` uses the value of `OCR_JOBS` (default: `2`).
+- `--jobs` uses the positive-integer value of `OCR_JOBS` when provided; otherwise, it defaults to 3/4 of the logical CPU count reported by `nproc --all`.
 
 The script does not specify an OCR language; OCRmyPDF therefore uses its configured default language. Output is first written to a temporary file in the target directory and moved to its final path only after OCR completes successfully.
 

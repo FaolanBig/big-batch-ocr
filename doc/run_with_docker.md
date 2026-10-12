@@ -41,8 +41,8 @@ docker run --rm -it \
 	ocr_batch_sequencial:1.0.0
 ```
 
-Replace the example host paths and adjust `OCR_JOBS` to set the number of OCR threads. If omitted, the script uses 75% of the available CPUs.
+Replace the example host paths and adjust `OCR_JOBS` to set the number of OCR threads. If omitted, the script uses 75% of the logical CPU count reported by `nproc --all`.
 
 ## Run the script
 
-The container starts the script automatically (no tmux needed). It scans `/source`, OCRs PDF files, and copies other files to `/destination`. Script messages are shown in the terminal and also written to a log file; the ocrmypdf output and progress are only written to the log file. Logs are stored in `/destination/.ocr_sequencial_state/logs` (override with `-e LOG_DIR=...`). Completed OCR files and state markers are written to the output directory.
+The container starts the script automatically (no tmux needed). It scans `/source`, OCRs PDF files, and copies other files to `/destination`. Script messages are shown in the terminal and also written to a log file; OCRmyPDF output is written to the log file only. The container does not display a progress pane. Logs are stored in `/destination/.ocr_sequencial_state/logs` (override with `-e LOG_DIR=...`). Completed OCR files and state markers are written to the output directory.

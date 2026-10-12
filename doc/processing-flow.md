@@ -8,7 +8,7 @@ The script follows a clear linear execution path:
 2. validate arguments and dependencies
 3. normalize source and target paths
 4. create the target state directory
-5. verify tmux runtime and create progress/log panes
+5. set up the runtime UI (tmux panes for native runs; no tmux in Docker)
 6. scan source directory for files
 7. copy non-PDF files
 8. process PDF files one by one
@@ -18,7 +18,7 @@ This is a batch job rather than a streaming pipeline: each pass is completed bef
 
 ## Step 1: startup and validation
 
-At startup, the script requires exactly two arguments: a source directory and a target directory.
+At startup, the native script requires non-empty source and target directory arguments. Pass these as the only two arguments; additional arguments are not used.
 
 ```bash
 if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
@@ -26,7 +26,7 @@ if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
 fi
 ```
 
-It checks for the required command-line tools and immediately exits on the first missing requirement.
+It checks for required command-line tools and immediately exits on the first missing requirement.
 
 It then resolves both paths so comparisons are robust and consistent:
 
@@ -43,9 +43,11 @@ The script rejects several invalid layouts:
 
 This is a strong guardrail because copy-and-OCR processes should not mutate a directory tree that they are also scanning.
 
-## Step 2: tmux setup and runtime environment
+## Step 2: runtime setup
 
-The script requires `TMUX` to be present:
+The native script requires an existing tmux session and creates progress and log panes. The Docker entry point runs without tmux and writes logs under the destination's `.ocr_sequencial_state/logs` directory by default (`LOG_DIR` can override this).
+
+For native runs, the script requires `TMUX` to be present:
 
 ```bash
 if [[ -z "${TMUX:-}" ]]; then
@@ -59,7 +61,7 @@ It creates a run ID:
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 ```
 
-Then it creates three files in `/tmp`:
+For a native run, it creates three files in `/tmp`:
 
 - `ocr_status_<run-id>`
 - `ocr_output_<run-id>.log`
@@ -107,7 +109,7 @@ for file in "${ALL_FILES[@]}"; do
 done
 ```
 
-This means the script treats a file as a PDF if its final extension is `.pdf` in a case-insensitive match. No attempt is made to validate the actual PDF signature at this stage.
+This means the script treats a file as a PDF if its final extension is `.pdf` in a case-insensitive match. No attempt is made to validate the actual PDF signature at this stage. The Docker entry point uses the same file discovery and classification logic.
 
 The counts are then computed:
 
@@ -299,6 +301,8 @@ The options do the following:
 - `--skip-text`: skip pages already containing text
 - `--jobs`: configure parallelism inside OCRmyPDF
 
+Both entry points use the positive-integer `OCR_JOBS` value when provided; otherwise, they derive `CPU_THREADS` as 75% of the logical CPU count reported by `nproc --all`.
+
 This is a strong cleanup-and-optimization workflow intended for scanned document processing.
 
 ## Step 8: publish output only after success
@@ -311,7 +315,7 @@ CURRENT_TMP="$tmp_out"
 CURRENT_MARKER_TMP="$marker_tmp"
 ```
 
-Only after OCRmyPDF returns success does it attempt to move the output into place:
+Only after OCRmyPDF returns success does it move the temporary output into place. It then writes the source signature to a temporary marker and moves that marker into place:
 
 ```bash
 if mv -f -- "$tmp_out" "$out"; then
@@ -322,7 +326,7 @@ if mv -f -- "$tmp_out" "$out"; then
         echo "[SUCCESS] completed OCR for $pdf"
 ```
 
-This ensures that the final PDF is replaced only after the OCR output has been successfully generated and the state marker has been recorded.
+The output is published before the marker. If publishing the output fails, the PDF is counted as failed. If writing or publishing the marker fails, the output remains but the PDF is still counted as failed; because it has no matching marker, a later run reprocesses it.
 
 ## Step 9: failure handling within the PDF loop
 
@@ -406,4 +410,4 @@ This is a deliberate operational choice: long-running OCR batches are more usefu
 
 ## Summary
 
-The execution flow is intentionally conservative and publication-safe. It first preserves non-PDF files, then handles PDFs in a resumable, stateful manner. The script ensures that users can monitor both progress and detailed OCR output in real time, even while the job is still running.
+The execution flow is intentionally conservative and publication-safe. It first preserves non-PDF files, then handles PDFs in a resumable, stateful manner. Native runs provide live progress and OCR-log panes in tmux; Docker runs stream script messages to the terminal and retain OCRmyPDF output in the configured log directory.
