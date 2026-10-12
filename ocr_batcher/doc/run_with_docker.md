@@ -20,7 +20,7 @@ The example `v1.2.3` is a placeholder; use a tag that exists in the [package reg
 
 ## Build the image
 
-From the `docker` directory (the build script uses the current directory as its build context):
+From the `ocr_batcher/` directory (change into it first if you're at the repository root):
 
 ```bash
 cd docker
