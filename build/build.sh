@@ -32,6 +32,7 @@ cleanup() {
     fi
 
     rm -rf "$REPO_ROOT/src/ocr_sequencial.sh.x.c" || exit_code=1
+    echo "[INFO] Cleaned up temporary files"
 
     exit "$exit_code"
 }
