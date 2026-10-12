@@ -16,7 +16,7 @@ tmux new -s ocr
 bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 ```
 
-The native script sets OCRmyPDF's `--jobs` value to 75% of the logical CPU count reported by `nproc --all`. It currently does not honor the `OCR_JOBS` environment variable.
+The native script uses a positive-integer `OCR_JOBS` value when provided; otherwise, it sets OCRmyPDF's `--jobs` value to 75% of the logical CPU count reported by `nproc --all`.
 
 ## Docker execution
 
@@ -30,7 +30,7 @@ docker run --rm -it \
   ghcr.io/faolanbig/big-batch-ocr:<tag>
 ```
 
-The Docker entry point honors a positive-integer `OCR_JOBS` value and defaults to 75% of the logical CPU count when it is unset.
+The Docker entry point uses the same positive-integer `OCR_JOBS` override and defaults to 75% of the logical CPU count when it is unset.
 
 ## File handling and resume behavior
 

@@ -23,4 +23,4 @@ bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 
 The Docker image does not require tmux on the host. Mount the input at `/source` (read-only is recommended) and the output at `/destination`; see [Run OCR in Docker](./run_with_docker.md).
 
-Both entry points require the source directory to exist and reject identical source/target directories or a target inside the source. PDF detection is based on a case-insensitive `.pdf` suffix. The native script derives OCRmyPDF's job count from 75% of the logical CPU count; the Docker script also accepts `OCR_JOBS`.
+Both entry points require the source directory to exist and reject identical source/target directories or a target inside the source. PDF detection is based on a case-insensitive `.pdf` suffix. Both accept a positive-integer `OCR_JOBS` override and otherwise use 75% of the logical CPU count reported by `nproc --all`.

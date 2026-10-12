@@ -196,10 +196,10 @@ This ensures consistent path comparisons and prevents accidental path confusion 
 The native script sets:
 
 ```bash
-export CPU_THREADS="$(($(nproc --all) * 3 / 4))"
+export CPU_THREADS="${OCR_JOBS:-$(($(nproc --all) * 3 / 4))}"
 ```
 
-This uses roughly 75% of the machine’s total logical CPU count. The native script does not currently read `OCR_JOBS`; its job count is derived unconditionally from `nproc --all`.
+If `OCR_JOBS` is set to a non-empty value, that value is used; otherwise the script uses roughly 75% of the machine’s total logical CPU count. Both entry points validate that the resulting value is a positive integer.
 
 That value is passed to OCRmyPDF via:
 
@@ -209,7 +209,7 @@ That value is passed to OCRmyPDF via:
 
 This is a process-level concurrency setting inside OCRmyPDF, not a loop-level parallelism setting for this script itself.
 
-The Docker entry point differs here: it uses `OCR_JOBS` when set, and otherwise uses the same 75%-of-logical-CPUs default. It rejects a non-positive or non-integer value.
+The Docker entry point uses the same `OCR_JOBS` override and 75%-of-logical-CPUs default.
 
 ## File list generation
 

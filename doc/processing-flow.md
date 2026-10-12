@@ -301,7 +301,7 @@ The options do the following:
 - `--skip-text`: skip pages already containing text
 - `--jobs`: configure parallelism inside OCRmyPDF
 
-The native script derives `CPU_THREADS` as 75% of the logical CPU count and does not currently use the `OCR_JOBS` environment variable. The Docker entry point accepts `OCR_JOBS` as an override and uses the same default when it is unset.
+Both entry points use the positive-integer `OCR_JOBS` value when provided; otherwise, they derive `CPU_THREADS` as 75% of the logical CPU count reported by `nproc --all`.
 
 This is a strong cleanup-and-optimization workflow intended for scanned document processing.
 
