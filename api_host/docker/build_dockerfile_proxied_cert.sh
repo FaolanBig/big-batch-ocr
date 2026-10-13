@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-certificate=/usr/local/share/ca-certificates/vector_root_cert.crt # Path to the company CA certificate
+certificate=/usr/local/share/ca-certificates/root_cert.crt # Path to the company CA certificate
 cd -- "$repo_root"
 
 if ! sudo test -r "$certificate"; then

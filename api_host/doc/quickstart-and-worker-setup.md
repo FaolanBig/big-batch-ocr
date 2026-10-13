@@ -60,9 +60,9 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   "$DOCKER_DATA_ROOT/processed"
 ```
 
-`DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. Compose
-mounts this same host directory into the API container at `/data`, and the API
-maps validated relative paths back to that host path for the OCR container.
+`DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. The
+container mounts this same host directory at `/data`, and the API maps
+validated relative paths back to that host path for the OCR container.
 Do not point it at a path that is available only inside the API container.
 The API container runs as UID 65532; ensure its input/output directories are
 accessible to that user. The OCR container must also be able to read the input
@@ -96,21 +96,62 @@ the Docker host.
 
 ### 4. Build and start the API host
 
-Run from the repository root:
+From the repository root, choose the standard build or the corporate proxy
+build:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml up --build -d
-docker compose -f api_host/docker/compose.yaml ps
-docker compose -f api_host/docker/compose.yaml logs --tail=100 api-host
+# Standard build; does not pass a CA certificate secret.
+bash api_host/docker/build_dockerfile.sh
+
+# OR: proxy build; uses the company CA as a temporary BuildKit secret.
+bash api_host/docker/build_dockerfile_proxied_cert.sh
 ```
 
-Or with `sudo`
+The standard script builds `big-batch-ocr-api-host:testing`. The proxy script
+builds `big-batch-ocr-api-host:proxied` and requires the readable certificate
+at `/usr/local/share/ca-certificates/root_cert.crt`. The certificate is
+used only during module download and is not copied into the image.
+
+Create a protected runtime `.env` file in the repository root with the
+application configuration (at minimum `API_KEY`, `OCR_IMAGE`,
+`DATA_ROOT=/data`, `DOCKER_DATA_ROOT=/srv/big-batch-ocr-data`,
+`DATABASE_PATH=/var/lib/api-host/jobs.db`, and optional worker settings). For
+example:
+
+```dotenv
+API_KEY=replace-with-a-long-random-secret
+OCR_IMAGE=ghcr.io/faolanbig/big-batch-ocr:v1.2.3
+DATA_ROOT=/data
+DOCKER_DATA_ROOT=/srv/big-batch-ocr-data
+DATABASE_PATH=/var/lib/api-host/jobs.db
+OCR_JOBS=3
+MAX_CONCURRENT_JOBS=1
+SYNC_WAIT_LIMIT_SECONDS=30
+```
+
+Protect the file with `chmod 600 .env` and replace the example key and OCR
+image tag with your actual values.
+
+The build scripts do not read `.env`; Docker reads it when the container is
+started. Then start the image you built:
 
 ```sh
-docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml up --build -d
-docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml ps
-docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml logs --tail=100 api-host
+sudo docker volume create api-host-state
+sudo docker run -d --name api-host --restart unless-stopped \
+  --env-file .env \
+  -p 127.0.0.1:8080:8080 \
+  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /srv/big-batch-ocr-data:/data:rw \
+  -v api-host-state:/var/lib/api-host \
+  big-batch-ocr-api-host:testing
+sudo docker ps --filter name=api-host
+sudo docker logs --tail=100 api-host
 ```
+
+For the proxy build, replace `:testing` with `:proxied`. Change both the host
+path in the bind mount and `DOCKER_DATA_ROOT` in `.env` together if you use a
+different data location.
 
 The image contains the API host only. It connects to the Docker Engine through
 the mounted socket and creates OCR containers when jobs are accepted. The
@@ -188,8 +229,8 @@ job is not cancelled at the wait limit; poll its status URL.
 Inspect API logs and running containers:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml logs --follow api-host
-docker ps --filter label=com.faolanbig.big-batch-ocr.managed=true
+sudo docker logs --follow api-host
+sudo docker ps --filter label=com.faolanbig.big-batch-ocr.managed=true
 ```
 
 The API removes completed OCR containers after recording their exit result and
@@ -201,21 +242,29 @@ Plan retention and backups for both the host data directory and the Compose
 Stop with:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml down
+sudo docker stop api-host
+sudo docker rm api-host
 ```
 
-`down` preserves the named database volume. Do not add `--volumes` unless you
-intend to delete persisted job history and queued work.
+Stopping/removing the container preserves the `api-host-state` named volume.
+Do not run `docker volume rm api-host-state` unless you intend to delete
+persisted job history and queued work.
 
 ## Adjusting worker capacity
 
-Change `MAX_CONCURRENT_JOBS` and/or `OCR_JOBS` in the environment used to start
-Compose, then recreate the single API-host container:
+Change `MAX_CONCURRENT_JOBS` and/or `OCR_JOBS` in `.env`, then recreate the
+single API-host container with the same image tag and mounts:
 
 ```sh
-export MAX_CONCURRENT_JOBS=2
-export OCR_JOBS=2
-docker compose -f api_host/docker/compose.yaml up -d --force-recreate api-host
+sudo docker rm -f api-host
+sudo docker run -d --name api-host --restart unless-stopped \
+  --env-file .env \
+  -p 127.0.0.1:8080:8080 \
+  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /srv/big-batch-ocr-data:/data:rw \
+  -v api-host-state:/var/lib/api-host \
+  big-batch-ocr-api-host:testing
 ```
 
 This configures two in-process queue workers, with each OCR container using
@@ -228,7 +277,7 @@ this API-host instance.
 
 | Symptom | Checks |
 | --- | --- |
-| API container exits during startup | Check `docker compose logs api-host`; verify `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH` configuration. |
+| API container exits during startup | Check `sudo docker logs api-host`; verify `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH` configuration. |
 | `permission denied` accessing Docker | Check `/var/run/docker.sock` permissions and `DOCKER_GID`; do not loosen socket permissions to world-writable. |
 | Job rejected with `INVALID_PATH` | Use paths relative to `/data`; check existence, directory type, access permissions, and symlink targets. |
 | Destination does not exist | Create it on the host or request `"createDestination":true`. |
