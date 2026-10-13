@@ -19,7 +19,7 @@ fi
 
 if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
   printf 'Runtime environment file is missing or unreadable: %s\n' "$env_file" >&2
-  printf 'Create it from api_host/docker/.env_template and secure it with chmod 600.\n' >&2
+  printf 'Create it with api_host/config/configure_api_host.sh or copy api_host/env/.env_template and secure it with chmod 600.\n' >&2
   exit 1
 fi
 

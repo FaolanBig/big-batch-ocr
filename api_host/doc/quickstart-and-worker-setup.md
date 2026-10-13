@@ -74,24 +74,32 @@ job tracking.
 
 ### 3. Configure runtime credentials
 
-Create the runtime environment file and set a random API key, OCR image, and
-host data directory:
+Create the runtime environment file with the interactive configurator:
 
 ```sh
-cp api_host/docker/.env_template api_host/docker/.env
-chmod 600 api_host/docker/.env
+./api_host/config/configure_api_host.sh
 ```
 
-Edit `api_host/docker/.env`: set `API_KEY` to the output of
-`openssl rand -hex 32`, set `OCR_IMAGE` to the pinned tag selected above, and
-set `DOCKER_DATA_ROOT` to the data directory selected in step 2. Keep
-`DATA_ROOT=/data`. The `.env` template uses plain `KEY=VALUE` entries; do not
-add `export` or shell command substitutions. Keep `API_KEY` protected and do
-not commit it or put it into a Docker build argument. Authentication is
-required unless `ALLOW_ANONYMOUS=true` is explicitly set. Do not enable
-anonymous mode on an exposed network. If you use Compose instead of the run
-script, replace `DOCKER_GID` with the numeric output of
-`stat -c '%g' /var/run/docker.sock`; the run script calculates it for you.
+The script prompts for the OCR image, API key (press Enter to generate one),
+Docker data root, and worker settings, then saves `api_host/env/.env` with
+permissions `600`. Use the OCR image and data-root values selected in step 2.
+Keep `API_KEY` protected; do not commit it or put it into a Docker build
+argument. Authentication is required unless `ALLOW_ANONYMOUS=true` is
+explicitly set. Do not enable anonymous mode on an exposed network. If you use
+Compose instead of the run script, set `DOCKER_GID` to the numeric output of
+`stat -c '%g' /var/run/docker.sock`; the run launcher calculates it for you.
+
+Alternatively, create the same file by manually editing the template:
+
+```sh
+cp api_host/env/.env_template api_host/env/.env
+chmod 600 api_host/env/.env
+```
+
+Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
+`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`; use plain `KEY=VALUE`
+entries without `export` or shell command substitutions. The API key can be
+generated with `openssl rand -hex 32`.
 
 If Docker socket permissions prevent the API container from connecting,
 resolve access through your host's Docker administration policy. Do not make
@@ -134,7 +142,7 @@ sudo docker ps --filter name=api-host
 sudo docker logs --tail=100 api-host
 ```
 
-The launcher reads `api_host/docker/.env`, binds `DOCKER_DATA_ROOT` at `/data`,
+The launcher reads `api_host/env/.env`, binds `DOCKER_DATA_ROOT` at `/data`,
 and creates/reuses the persistent `api-host-state` volume. It leaves an
 already-running API host unchanged; if the named container is stopped, it
 recreates it with the current environment file.

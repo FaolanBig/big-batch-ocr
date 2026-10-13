@@ -72,20 +72,32 @@ Completed OCR containers are removed after their outcome and logs are captured.
 The OCR image stores its own processing logs in the mounted destination, so
 apply retention controls to output directories as appropriate.
 
-Create the runtime environment file and data root:
+Create the runtime environment file with the guided configurator:
 
 ```sh
-cp api_host/docker/.env_template api_host/docker/.env
-chmod 600 api_host/docker/.env
+./api_host/config/configure_api_host.sh
 sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
 ```
 
-Edit `api_host/docker/.env` and replace the sample `API_KEY`, `OCR_IMAGE`, and
-`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`, and ensure the host data
-directory is accessible to both the API and OCR containers. If using Compose,
-also replace `DOCKER_GID` with `stat -c '%g' /var/run/docker.sock`. The
-launcher derives that value itself. The template uses plain `KEY=VALUE`
-syntax; do not prefix entries with `export`.
+The configurator prompts for an OCR image, API key (or generates one),
+Docker-visible data root, worker settings, and anonymous-access choice. It
+saves the file as `api_host/env/.env` with mode `600`. The data-root directory
+must be accessible to both the API and OCR containers. The configurator
+detects the socket group ID when available; the run launcher detects it at
+startup.
+
+Alternatively, manually copy and edit the template:
+
+```sh
+cp api_host/env/.env_template api_host/env/.env
+chmod 600 api_host/env/.env
+```
+
+Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
+`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`. If using Compose, also
+replace `DOCKER_GID` with `stat -c '%g' /var/run/docker.sock`. Use plain
+`KEY=VALUE` syntax without `export`. Keep the secret file private and do not
+commit it.
 
 Start with the single launcher for either image:
 
@@ -102,8 +114,8 @@ If both image tags are installed, specify the desired tag:
 The launcher uses the same runtime arguments for both images, calculates the
 Docker socket group ID, and preserves job state in the `api-host-state` named
 volume. If `api-host` is already running, it leaves it untouched. If that
-container exists but is stopped, it replaces it so the current `.env` settings
-are applied. For Compose deployment and its configuration, see
+container exists but is stopped, it replaces it so the current `env/.env`
+settings are applied. For Compose deployment and its configuration, see
 [`../docker/compose.yaml`](../docker/compose.yaml).
 
 ## API usage
