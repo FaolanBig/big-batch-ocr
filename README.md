@@ -105,3 +105,11 @@ Each run creates three files in `/tmp`:
 - `ocr_status_<run-id>`: temporary status data for the progress pane; this file is removed when the script exits.
 
 The OCR and error logs remain in `/tmp` after the run. Their paths are printed at the end. Temporary output and marker files are cleaned up when the script exits. If a file fails, the script continues with the remaining files and exits with status code `1`; a successful run exits with status code `0`. The final summary includes counts of failed PDFs and non-PDF files.
+
+---
+
+## ❤️ Sponsor
+
+- Bitcoin (BTC): `bc1q2ss7n5gv3tr68dfqtmcvy830pj4clf7wqxztk5`
+- Ethereum (ETH): `0x8AA598780c6529DCB771B9455E2717043BB1a1e1`
+- Solana (SOL): `21BpX9xhkitMEWx2iBxGXEVsFCMF9huViud24NbrPqNC`
