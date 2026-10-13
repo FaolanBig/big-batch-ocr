@@ -1,9 +1,10 @@
+# syntax=docker/dockerfile:1.7
 FROM golang:1.26.1-alpine3.23 AS build
 
 # Run this Dockerfile with the root certificate secret mounted:
 #   sudo docker buildx build --load \
-#  --secret id=root_cert,src=/usr/local/share/ca-certificates/root_cert.crt \
-#  -f api_host/docker/Dockerfile_proxied \
+#  --secret id=root_cert,src=/usr/local/share/ca-certificates/vector_root_cert.crt \
+#  -f api_host/docker/Dockerfile_proxied_cert \
 #  -t big-batch-ocr-api-host:proxied \
 #  .
 #
