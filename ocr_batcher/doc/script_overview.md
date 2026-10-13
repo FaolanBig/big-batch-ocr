@@ -1,5 +1,7 @@
 # Script overview
 
+> :information_source: everything in here applies to the folder `[ocr_batcher](../../ocr_batcher/)`, not the repos root folder.
+
 ## Supported entry points
 
 The current native workflow is implemented in [`src/ocr_sequencial.sh`](../src/ocr_sequencial.sh). The Docker image runs [`docker/ocr_sequencial_docker.sh`](../docker/ocr_sequencial_docker.sh), a container-oriented variant of the same workflow. [`src/ocr.sh`](../src/ocr.sh) is deprecated.

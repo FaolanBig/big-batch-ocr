@@ -1,5 +1,7 @@
 # Big Batch OCR: `ocr_sequencial.sh`
 
+The OCR application is in `ocr_batcher/`. Run the commands below from that directory.
+
 ## Installation
 
 Use either the Bash script at `src/ocr_sequencial.sh` or the compiled binary at `bin/ocr_sequencial`. The binary is also available from the [GitHub Releases](https://github.com/FaolanBig/big-batch-ocr/releases) page. Both provide the current OCR workflow.
