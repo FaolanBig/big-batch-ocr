@@ -2,7 +2,7 @@ FROM golang:1.26.1-alpine3.23 AS build
 
 WORKDIR /src
 COPY api_host/src/go.mod api_host/src/go.sum ./
-RUN go mod download
+RUN GOPROXY=direct go mod download
 COPY api_host/src/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api-host .
 RUN mkdir -p /api-host-state && touch /api-host-state/.keep
