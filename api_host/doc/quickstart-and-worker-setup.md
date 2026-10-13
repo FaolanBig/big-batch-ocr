@@ -104,6 +104,14 @@ docker compose -f api_host/docker/compose.yaml ps
 docker compose -f api_host/docker/compose.yaml logs --tail=100 api-host
 ```
 
+Or with `sudo`
+
+```sh
+docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml up --build -d
+docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml ps
+docker --preserve-env=OCR_IMAGE,DOCKER_GID compose -f api_host/docker/compose.yaml logs --tail=100 api-host
+```
+
 The image contains the API host only. It connects to the Docker Engine through
 the mounted socket and creates OCR containers when jobs are accepted. The
 SQLite database is persisted in the `api-host-state` named volume, so queued
