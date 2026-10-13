@@ -2,34 +2,29 @@
 
 ## Build and runtime configuration
 
-Each script resolves the repository root from its own location. From the
-repository root, choose **one** build:
+From the repository root, build either image:
 
 ```sh
 # Standard build; does not pass a CA certificate secret.
-bash api_host/docker/build_dockerfile.sh
+bash api_host/build/build_dockerfile.sh
 
 # Corporate TLS-inspection proxy build; passes the company CA as a BuildKit secret.
-bash api_host/docker/build_dockerfile_proxied_cert.sh
+bash api_host/build/build_dockerfile_proxied_cert.sh
 ```
 
 The standard script builds `big-batch-ocr-api-host:testing`. The proxied
-certificate script builds `big-batch-ocr-api-host:proxied` and requires the
-readable certificate at
-`/usr/local/share/ca-certificates/root_cert.crt`. That certificate is
-mounted only while Go downloads modules; it is not copied into the resulting
-image. Neither build script reads the runtime `.env` file.
+script builds `big-batch-ocr-api-host:proxied` and uses the readable
+certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
+BuildKit secret. The CA is mounted only while Go downloads modules; it is not
+copied into the resulting image. Neither script reads the runtime `.env`.
 
-Compose's `up --build` builds the default `api_host/docker/Dockerfile`
-(without a certificate secret), not either script's tagged image. To use the
-already-built image from either script, start it with `docker run --env-file`
-as shown below; `docker buildx build` itself does not load `.env` values into
-the image. For a Compose run, provide its interpolation values through the
-shell or `docker compose --env-file .env`.
+The same runtime setup works for either image because the CA secret only
+changes how dependencies are downloaded during the build. The launcher below
+selects the sole locally available image automatically, or accepts an image
+tag when both are present.
 
 Before starting, configure the runtime variables. These can be passed using a
-protected `.env` file with `docker run --env-file .env`, or exported in the
-environment for Compose:
+protected `.env` file:
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
@@ -43,7 +38,7 @@ environment for Compose:
 | `MAX_CONCURRENT_JOBS` | No | `1` | Maximum OCR containers running at once |
 | `SYNC_WAIT_LIMIT_SECONDS` | No | `30` | Synchronous response wait limit; a timeout does not cancel the job |
 | `API_ADDRESS` | No | `:8080` | HTTP listen address |
-| `DOCKER_GID` | For Compose | — | Numeric group ID allowed to access the Docker socket; `docker run` example derives it using `stat` |
+| `DOCKER_GID` | Compose only | — | Numeric Docker socket group ID; the run script derives it automatically |
 
 Use your deployment secret manager to inject `API_KEY`; do not put a production
 key in the Compose file or source control. Generate a high-entropy key, restrict
@@ -77,27 +72,39 @@ Completed OCR containers are removed after their outcome and logs are captured.
 The OCR image stores its own processing logs in the mounted destination, so
 apply retention controls to output directories as appropriate.
 
-Example runtime startup with the image from either build script (run from the
-directory containing `.env`, or adjust its path):
+Create the runtime environment file and data root:
 
 ```sh
-sudo docker volume create api-host-state
-sudo docker run -d --name api-host --restart unless-stopped \
-  --env-file .env \
-  -p 127.0.0.1:8080:8080 \
-  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /srv/big-batch-ocr-data:/data:rw \
-  -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+cp api_host/docker/.env_template api_host/docker/.env
+chmod 600 api_host/docker/.env
+sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
 ```
 
-Use `big-batch-ocr-api-host:proxied` instead of `:testing` if you built with
-the proxied-certificate script. Set `DOCKER_DATA_ROOT` in `.env` to the same
-host path mounted at `/data` (here `/srv/big-batch-ocr-data`). Set `DATA_ROOT`
-to `/data`. Ensure the input and output directories are accessible to both
-the API container and OCR container. For Compose deployment and its
-configuration, see [`../docker/compose.yaml`](../docker/compose.yaml).
+Edit `api_host/docker/.env` and replace the sample `API_KEY`, `OCR_IMAGE`, and
+`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`, and ensure the host data
+directory is accessible to both the API and OCR containers. If using Compose,
+also replace `DOCKER_GID` with `stat -c '%g' /var/run/docker.sock`. The
+launcher derives that value itself. The template uses plain `KEY=VALUE`
+syntax; do not prefix entries with `export`.
+
+Start with the single launcher for either image:
+
+```sh
+./api_host/run/run_container.sh
+```
+
+If both image tags are installed, specify the desired tag:
+
+```sh
+./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
+```
+
+The launcher uses the same runtime arguments for both images, calculates the
+Docker socket group ID, and preserves job state in the `api-host-state` named
+volume. If `api-host` is already running, it leaves it untouched. If that
+container exists but is stopped, it replaces it so the current `.env` settings
+are applied. For Compose deployment and its configuration, see
+[`../docker/compose.yaml`](../docker/compose.yaml).
 
 ## API usage
 

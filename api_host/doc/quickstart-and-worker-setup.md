@@ -72,22 +72,26 @@ Place a test PDF in `incoming/sample` if you want to verify OCR end to end.
 An empty input directory can also be submitted to test container startup and
 job tracking.
 
-### 3. Configure credentials and Docker socket group
+### 3. Configure runtime credentials
 
-Export a random API key and the numeric group ID that can access the Docker
-socket:
+Create the runtime environment file and set a random API key, OCR image, and
+host data directory:
 
 ```sh
-export API_KEY="$(openssl rand -hex 32)"
-export DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
-export MAX_CONCURRENT_JOBS=1
-export OCR_JOBS=3
+cp api_host/docker/.env_template api_host/docker/.env
+chmod 600 api_host/docker/.env
 ```
 
-Keep `API_KEY` in a secret manager or protected shell environment; do not
-commit it or put it into a Docker build argument. Authentication is required
-unless `ALLOW_ANONYMOUS=true` is explicitly set. Do not enable anonymous mode
-on an exposed network.
+Edit `api_host/docker/.env`: set `API_KEY` to the output of
+`openssl rand -hex 32`, set `OCR_IMAGE` to the pinned tag selected above, and
+set `DOCKER_DATA_ROOT` to the data directory selected in step 2. Keep
+`DATA_ROOT=/data`. The `.env` template uses plain `KEY=VALUE` entries; do not
+add `export` or shell command substitutions. Keep `API_KEY` protected and do
+not commit it or put it into a Docker build argument. Authentication is
+required unless `ALLOW_ANONYMOUS=true` is explicitly set. Do not enable
+anonymous mode on an exposed network. If you use Compose instead of the run
+script, replace `DOCKER_GID` with the numeric output of
+`stat -c '%g' /var/run/docker.sock`; the run script calculates it for you.
 
 If Docker socket permissions prevent the API container from connecting,
 resolve access through your host's Docker administration policy. Do not make
@@ -101,57 +105,39 @@ build:
 
 ```sh
 # Standard build; does not pass a CA certificate secret.
-bash api_host/docker/build_dockerfile.sh
+bash api_host/build/build_dockerfile.sh
 
 # OR: proxy build; uses the company CA as a temporary BuildKit secret.
-bash api_host/docker/build_dockerfile_proxied_cert.sh
+bash api_host/build/build_dockerfile_proxied_cert.sh
 ```
 
-The standard script builds `big-batch-ocr-api-host:testing`. The proxy script
-builds `big-batch-ocr-api-host:proxied` and requires the readable certificate
-at `/usr/local/share/ca-certificates/root_cert.crt`. The certificate is
-used only during module download and is not copied into the image.
-
-Create a protected runtime `.env` file in the repository root with the
-application configuration (at minimum `API_KEY`, `OCR_IMAGE`,
-`DATA_ROOT=/data`, `DOCKER_DATA_ROOT=/srv/big-batch-ocr-data`,
-`DATABASE_PATH=/var/lib/api-host/jobs.db`, and optional worker settings). For
-example:
-
-```dotenv
-API_KEY=replace-with-a-long-random-secret
-OCR_IMAGE=ghcr.io/faolanbig/big-batch-ocr:v1.2.3
-DATA_ROOT=/data
-DOCKER_DATA_ROOT=/srv/big-batch-ocr-data
-DATABASE_PATH=/var/lib/api-host/jobs.db
-OCR_JOBS=3
-MAX_CONCURRENT_JOBS=1
-SYNC_WAIT_LIMIT_SECONDS=30
-```
-
-Protect the file with `chmod 600 .env` and replace the example key and OCR
-image tag with your actual values.
-
-The build scripts do not read `.env`; Docker reads it when the container is
-started. Then start the image you built:
+The proxy script reads the certificate at
+`/usr/local/share/ca-certificates/root_cert.crt` as a BuildKit secret.
+The CA is used only during module download and is not copied into the image.
+Neither build script reads the runtime `.env` file. Start the image using the
+launcher, which works identically for either build:
 
 ```sh
-sudo docker volume create api-host-state
-sudo docker run -d --name api-host --restart unless-stopped \
-  --env-file .env \
-  -p 127.0.0.1:8080:8080 \
-  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /srv/big-batch-ocr-data:/data:rw \
-  -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+./api_host/run/run_container.sh
+```
+
+If both images are available, pass the desired image:
+
+```sh
+./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
+```
+
+Check startup and health:
+
+```sh
 sudo docker ps --filter name=api-host
 sudo docker logs --tail=100 api-host
 ```
 
-For the proxy build, replace `:testing` with `:proxied`. Change both the host
-path in the bind mount and `DOCKER_DATA_ROOT` in `.env` together if you use a
-different data location.
+The launcher reads `api_host/docker/.env`, binds `DOCKER_DATA_ROOT` at `/data`,
+and creates/reuses the persistent `api-host-state` volume. It leaves an
+already-running API host unchanged; if the named container is stopped, it
+recreates it with the current environment file.
 
 The image contains the API host only. It connects to the Docker Engine through
 the mounted socket and creates OCR containers when jobs are accepted. The
