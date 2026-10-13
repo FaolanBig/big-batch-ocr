@@ -1,3 +1,4 @@
 # Documentation
 
-This directory is for API-host documentation, including setup, configuration, deployment, and usage guides.
+See [`deployment.md`](deployment.md) for configuration, deployment, Docker
+socket risk, path mapping, and API usage.
