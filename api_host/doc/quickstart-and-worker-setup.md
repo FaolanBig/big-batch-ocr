@@ -60,9 +60,9 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   "$DOCKER_DATA_ROOT/processed"
 ```
 
-`DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. Compose
-mounts this same host directory into the API container at `/data`, and the API
-maps validated relative paths back to that host path for the OCR container.
+`DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. The
+container mounts this same host directory at `/data`, and the API maps
+validated relative paths back to that host path for the OCR container.
 Do not point it at a path that is available only inside the API container.
 The API container runs as UID 65532; ensure its input/output directories are
 accessible to that user. The OCR container must also be able to read the input
@@ -72,22 +72,34 @@ Place a test PDF in `incoming/sample` if you want to verify OCR end to end.
 An empty input directory can also be submitted to test container startup and
 job tracking.
 
-### 3. Configure credentials and Docker socket group
+### 3. Configure runtime credentials
 
-Export a random API key and the numeric group ID that can access the Docker
-socket:
+Create the runtime environment file with the interactive configurator:
 
 ```sh
-export API_KEY="$(openssl rand -hex 32)"
-export DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
-export MAX_CONCURRENT_JOBS=1
-export OCR_JOBS=3
+./api_host/config/configure_api_host.sh
 ```
 
-Keep `API_KEY` in a secret manager or protected shell environment; do not
-commit it or put it into a Docker build argument. Authentication is required
-unless `ALLOW_ANONYMOUS=true` is explicitly set. Do not enable anonymous mode
-on an exposed network.
+The script prompts for the OCR image, API key (press Enter to generate one),
+Docker data root, and worker settings, then saves `api_host/env/.env` with
+permissions `600`. Use the OCR image and data-root values selected in step 2.
+Keep `API_KEY` protected; do not commit it or put it into a Docker build
+argument. Authentication is required unless `ALLOW_ANONYMOUS=true` is
+explicitly set. Do not enable anonymous mode on an exposed network. If you use
+Compose instead of the run script, set `DOCKER_GID` to the numeric output of
+`stat -c '%g' /var/run/docker.sock`; the run launcher calculates it for you.
+
+Alternatively, create the same file by manually editing the template:
+
+```sh
+cp api_host/env/.env_template api_host/env/.env
+chmod 600 api_host/env/.env
+```
+
+Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
+`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`; use plain `KEY=VALUE`
+entries without `export` or shell command substitutions. The API key can be
+generated with `openssl rand -hex 32`.
 
 If Docker socket permissions prevent the API container from connecting,
 resolve access through your host's Docker administration policy. Do not make
@@ -96,13 +108,44 @@ the Docker host.
 
 ### 4. Build and start the API host
 
-Run from the repository root:
+From the repository root, choose the standard build or the corporate proxy
+build:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml up --build -d
-docker compose -f api_host/docker/compose.yaml ps
-docker compose -f api_host/docker/compose.yaml logs --tail=100 api-host
+# Standard build; does not pass a CA certificate secret.
+bash api_host/build/build_dockerfile.sh
+
+# OR: proxy build; uses the company CA as a temporary BuildKit secret.
+bash api_host/build/build_dockerfile_proxied_cert.sh
 ```
+
+The proxy script reads the certificate at
+`/usr/local/share/ca-certificates/root_cert.crt` as a BuildKit secret.
+The CA is used only during module download and is not copied into the image.
+Neither build script reads the runtime `.env` file. Start the image using the
+launcher, which works identically for either build:
+
+```sh
+./api_host/run/run_container.sh
+```
+
+If both images are available, pass the desired image:
+
+```sh
+./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
+```
+
+Check startup and health:
+
+```sh
+sudo docker ps --filter name=api-host
+sudo docker logs --tail=100 api-host
+```
+
+The launcher reads `api_host/env/.env`, binds `DOCKER_DATA_ROOT` at `/data`,
+and creates/reuses the persistent `api-host-state` volume. It leaves an
+already-running API host unchanged; if the named container is stopped, it
+recreates it with the current environment file.
 
 The image contains the API host only. It connects to the Docker Engine through
 the mounted socket and creates OCR containers when jobs are accepted. The
@@ -180,8 +223,8 @@ job is not cancelled at the wait limit; poll its status URL.
 Inspect API logs and running containers:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml logs --follow api-host
-docker ps --filter label=com.faolanbig.big-batch-ocr.managed=true
+sudo docker logs --follow api-host
+sudo docker ps --filter label=com.faolanbig.big-batch-ocr.managed=true
 ```
 
 The API removes completed OCR containers after recording their exit result and
@@ -193,21 +236,29 @@ Plan retention and backups for both the host data directory and the Compose
 Stop with:
 
 ```sh
-docker compose -f api_host/docker/compose.yaml down
+sudo docker stop api-host
+sudo docker rm api-host
 ```
 
-`down` preserves the named database volume. Do not add `--volumes` unless you
-intend to delete persisted job history and queued work.
+Stopping/removing the container preserves the `api-host-state` named volume.
+Do not run `docker volume rm api-host-state` unless you intend to delete
+persisted job history and queued work.
 
 ## Adjusting worker capacity
 
-Change `MAX_CONCURRENT_JOBS` and/or `OCR_JOBS` in the environment used to start
-Compose, then recreate the single API-host container:
+Change `MAX_CONCURRENT_JOBS` and/or `OCR_JOBS` in `.env`, then recreate the
+single API-host container with the same image tag and mounts:
 
 ```sh
-export MAX_CONCURRENT_JOBS=2
-export OCR_JOBS=2
-docker compose -f api_host/docker/compose.yaml up -d --force-recreate api-host
+sudo docker rm -f api-host
+sudo docker run -d --name api-host --restart unless-stopped \
+  --env-file .env \
+  -p 127.0.0.1:8080:8080 \
+  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /srv/big-batch-ocr-data:/data:rw \
+  -v api-host-state:/var/lib/api-host \
+  big-batch-ocr-api-host:testing
 ```
 
 This configures two in-process queue workers, with each OCR container using
@@ -220,7 +271,7 @@ this API-host instance.
 
 | Symptom | Checks |
 | --- | --- |
-| API container exits during startup | Check `docker compose logs api-host`; verify `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH` configuration. |
+| API container exits during startup | Check `sudo docker logs api-host`; verify `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH` configuration. |
 | `permission denied` accessing Docker | Check `/var/run/docker.sock` permissions and `DOCKER_GID`; do not loosen socket permissions to world-writable. |
 | Job rejected with `INVALID_PATH` | Use paths relative to `/data`; check existence, directory type, access permissions, and symlink targets. |
 | Destination does not exist | Create it on the host or request `"createDestination":true`. |

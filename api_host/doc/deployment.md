@@ -1,9 +1,30 @@
 # API host deployment
 
-## Requirements and configuration
+## Build and runtime configuration
 
-Build the API-host image from the repository root with
-`docker compose -f api_host/docker/compose.yaml build`. Before starting, provide:
+From the repository root, build either image:
+
+```sh
+# Standard build; does not pass a CA certificate secret.
+bash api_host/build/build_dockerfile.sh
+
+# Corporate TLS-inspection proxy build; passes the company CA as a BuildKit secret.
+bash api_host/build/build_dockerfile_proxied_cert.sh
+```
+
+The standard script builds `big-batch-ocr-api-host:testing`. The proxied
+script builds `big-batch-ocr-api-host:proxied` and uses the readable
+certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
+BuildKit secret. The CA is mounted only while Go downloads modules; it is not
+copied into the resulting image. Neither script reads the runtime `.env`.
+
+The same runtime setup works for either image because the CA secret only
+changes how dependencies are downloaded during the build. The launcher below
+selects the sole locally available image automatically, or accepts an image
+tag when both are present.
+
+Before starting, configure the runtime variables. These can be passed using a
+protected `.env` file:
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
@@ -17,7 +38,7 @@ Build the API-host image from the repository root with
 | `MAX_CONCURRENT_JOBS` | No | `1` | Maximum OCR containers running at once |
 | `SYNC_WAIT_LIMIT_SECONDS` | No | `30` | Synchronous response wait limit; a timeout does not cancel the job |
 | `API_ADDRESS` | No | `:8080` | HTTP listen address |
-| `DOCKER_GID` | Compose only | — | Numeric group ID allowed to access the Docker socket |
+| `DOCKER_GID` | Compose only | — | Numeric Docker socket group ID; the run script derives it automatically |
 
 Use your deployment secret manager to inject `API_KEY`; do not put a production
 key in the Compose file or source control. Generate a high-entropy key, restrict
@@ -51,18 +72,51 @@ Completed OCR containers are removed after their outcome and logs are captured.
 The OCR image stores its own processing logs in the mounted destination, so
 apply retention controls to output directories as appropriate.
 
-Example startup:
+Create the runtime environment file with the guided configurator:
 
 ```sh
-export API_KEY="$(openssl rand -hex 32)"
-export OCR_IMAGE="ghcr.io/faolanbig/big-batch-ocr:v1.2.3"
-export DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
-export DOCKER_DATA_ROOT="/srv/big-batch-ocr-data"
-sudo install -d -m 0750 -o 65532 -g 65532 "$DOCKER_DATA_ROOT"
-docker compose -f api_host/docker/compose.yaml up --build -d
+./api_host/config/configure_api_host.sh
+sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
 ```
 
-Use an existing release tag in `OCR_IMAGE`; `v1.2.3` above is an example.
+The configurator prompts for an OCR image, API key (or generates one),
+Docker-visible data root, worker settings, and anonymous-access choice. It
+saves the file as `api_host/env/.env` with mode `600`. The data-root directory
+must be accessible to both the API and OCR containers. The configurator
+detects the socket group ID when available; the run launcher detects it at
+startup.
+
+Alternatively, manually copy and edit the template:
+
+```sh
+cp api_host/env/.env_template api_host/env/.env
+chmod 600 api_host/env/.env
+```
+
+Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
+`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`. If using Compose, also
+replace `DOCKER_GID` with `stat -c '%g' /var/run/docker.sock`. Use plain
+`KEY=VALUE` syntax without `export`. Keep the secret file private and do not
+commit it.
+
+Start with the single launcher for either image:
+
+```sh
+./api_host/run/run_container.sh
+```
+
+If both image tags are installed, specify the desired tag:
+
+```sh
+./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
+```
+
+The launcher uses the same runtime arguments for both images, calculates the
+Docker socket group ID, and preserves job state in the `api-host-state` named
+volume. If `api-host` is already running, it leaves it untouched. If that
+container exists but is stopped, it replaces it so the current `env/.env`
+settings are applied. For Compose deployment and its configuration, see
+[`../docker/compose.yaml`](../docker/compose.yaml).
 
 ## API usage
 
