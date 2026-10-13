@@ -2,9 +2,7 @@ FROM golang:1.26.1-alpine3.23 AS build
 
 WORKDIR /src
 COPY api_host/src/go.mod api_host/src/go.sum ./
-RUN apt-get update && \
-    apt-get install -y git && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache git
 RUN GOPROXY=direct go mod download
 COPY api_host/src/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api-host .
