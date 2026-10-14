@@ -87,13 +87,13 @@ dependency-install path to fetch OCRmyPDF from the AUR.
 
 ### 2. Run the batcher in Docker
 
-The published image starts OCR automatically. Replace the example tag with a
-version available in the
-[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr);
+The published image starts OCR automatically. The tag used here will pull the base release. 
+Replace the example tag with a version available in the
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr) if you want a specific release;
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
-TAG=v1.2.3
+TAG=v1.0.0
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
