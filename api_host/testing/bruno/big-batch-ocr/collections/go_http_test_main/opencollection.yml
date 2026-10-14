@@ -1,0 +1,37 @@
+opencollection: 1.0.0
+
+info:
+  name: go_http_test_main
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+request:
+  auth:
+    type: bearer
+    token: f146dec748fd61f73a7eef4caa890724faed20090a19889075922077455b9ac1
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git
+    presets:
+      request:
+        type: http
+        url: http://localhost:8080
+    openapi:
+      - sourceUrl: https://raw.githubusercontent.com/FaolanBig/big-batch-ocr/refs/heads/main/api_host/api/api_specification/main_api_specification_api_host.json
+        groupBy: tags
+        lastSyncDate: 2026-10-14T06:56:44.133Z
+        specHash: 4a5aeeca70b47ee5dde6121d2e462f14
+        autoCheck: true
+        autoCheckInterval: 5

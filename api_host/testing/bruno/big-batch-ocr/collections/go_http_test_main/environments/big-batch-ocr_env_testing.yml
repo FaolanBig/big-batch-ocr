@@ -1,0 +1,10 @@
+name: big-batch-ocr_env_testing
+variables:
+  - name: baseUrl
+    value: http://localhost:8080
+    description: base URL
+  - name: jobId
+    value: job_502b27b9bebf7000fc89
+  - secret: true
+    name: API_key
+    description: API auth key Bearer Token
