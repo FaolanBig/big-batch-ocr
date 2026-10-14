@@ -1,7 +1,0 @@
-name: big-batch-ocr_env_testing
-variables:
-  - name: baseUrl
-    value: http://localhost:8080
-    description: base URL
-  - name: jobId
-    value: job_7dcea5b6248e5c66fd7f
