@@ -17,7 +17,7 @@ config:
 request:
   auth:
     type: bearer
-    token: f146dec748fd61f73a7eef4caa890724faed20090a19889075922077455b9ac1
+    token: b9e8ca994bb2996272d961cee774a3a117d92bb71a1d88ac35a4f63da39a8c32
 bundled: false
 extensions:
   bruno:
@@ -27,7 +27,7 @@ extensions:
     presets:
       request:
         type: http
-        url: http://localhost:8080
+        url: "{{baseUrl}}"
     openapi:
       - sourceUrl: https://raw.githubusercontent.com/FaolanBig/big-batch-ocr/refs/heads/main/api_host/api/api_specification/main_api_specification_api_host.json
         groupBy: tags
