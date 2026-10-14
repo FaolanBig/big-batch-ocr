@@ -18,7 +18,14 @@ Prebuilt Docker images are published to [GitHub Container Registry](https://gith
 
 ## Quick Start
 
-Requirements: Bash, OCRmyPDF and its required OCR tools, and `tmux`. The usual GNU/Linux utilities `find`, `realpath`, `sha256sum`, `cmp`, `mktemp`, `cp`, `mv`, and `tail` must also be available. At startup, the script explicitly checks for `ocrmypdf`, `tmux`, `realpath`, `sha256sum`, and `cmp`.
+On startup, the bare-metal Bash script checks its required commands and
+automatically runs [`dependencies/install_dependencies.sh`](dependencies/install_dependencies.sh)
+if any are missing. The installer detects the Linux distribution and uses the
+appropriate package manager for Debian/Ubuntu, openSUSE, Fedora, RHEL, or Arch.
+Package installation may require administrator privileges; on Arch, run the
+script as a regular user with `sudo` configured so the AUR package is not built
+as root. See [`dependencies/README.md`](dependencies/README.md) for platform
+requirements and license/copyright information.
 
 To build the binary from the Bash script, install `shc` and run:
 

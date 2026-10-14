@@ -1,11 +1,17 @@
 # Bare-metal dependencies
 
-Run `install_dependencies.sh` to install the runtime requirements for
+The bare-metal Bash script automatically runs `install_dependencies.sh` when
+it finds any required commands missing. You can also run it manually to install
+the runtime requirements for
 [`src/ocr_sequencial.sh`](../src/ocr_sequencial.sh) on Debian/Ubuntu, openSUSE,
 Fedora, RHEL, or Arch Linux. The installer detects the distribution through
 `/etc/os-release`, then uses `apt`, `zypper`, `dnf`, or `pacman` as appropriate.
 Run it as root or through `sudo`, except on Arch where it must run as a
 non-root user with `sudo` configured.
+
+Automatic installation can request administrator authentication and may
+upgrade packages (the Arch `pacman -Syu` path). Unsupported distributions or
+failed package-manager commands stop the batcher with an error.
 
 ```bash
 bash dependencies/install_dependencies.sh
