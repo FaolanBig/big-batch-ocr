@@ -80,6 +80,10 @@ while [[ "$docker_data_root" != /* || "$docker_data_root" == *:* ]]; do
   read_value "Docker daemon data root" "/srv/big-batch-ocr-data"
   docker_data_root="$REPLY"
 done
+if ! sudo install -d -m 0750 -o 65532 -g 65532 -- "$docker_data_root"; then
+  printf 'Could not create the Docker data root with permissions for the API and OCR containers: %s\n' "$docker_data_root" >&2
+  exit 1
+fi
 
 default_docker_gid=""
 if [[ -S /var/run/docker.sock ]]; then

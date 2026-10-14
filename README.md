@@ -100,16 +100,25 @@ mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docke
 
 ### 3. Run the API host
 
-The API host accepts requests to process directories beneath a shared data
-root. It starts the configured OCR image using Docker, records jobs in a
+The API host accepts either a shared-directory input or an uploaded `.tar.gz`
+archive, starts the configured OCR image using Docker, records jobs in a
 persistent SQLite database, and exposes synchronous and asynchronous modes.
+Uploaded jobs receive isolated input/output folders, and the result can be
+downloaded by job ID; their workspace is removed after a successful download.
 The following is a quick outline; follow the complete
 [API host deployment guide](./api_host/doc/deployment.md) before exposing or
 operating the service.
 
-On a Linux Docker host, create a data root and its input/output directories.
-The API container runs as UID 65532, so make sure the data directories are
-accessible to both the API and OCR containers. For example:
+Configure the API on a Linux Docker host:
+
+```bash
+./api_host/config/configure_api_host.sh
+```
+
+The configurator asks for a versioned OCR image, creates or accepts an API key,
+creates the data root with permissions for UID/GID 65532, and writes a private
+`api_host/env/.env` file. If you plan to use shared-directory submissions,
+create input/output child folders and place source PDFs there:
 
 ```bash
 sudo install -d -m 0750 -o 65532 -g 65532 \
@@ -117,15 +126,10 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   /srv/big-batch-ocr-data/processed
 ```
 
-Put source PDFs in `incoming/scans`, then configure the API:
-
-```bash
-./api_host/config/configure_api_host.sh
-```
-
-The configurator asks for a versioned OCR image, creates or accepts an API key,
-and writes a private `api_host/env/.env` file. Build the API image and start
-the host:
+Replace the example root if you selected a different one. Archive uploads do
+not need these child folders; the API creates isolated per-job input/output
+directories automatically. The configured OCR image is pulled on first use if
+it is not already available locally. Build the API image and start the host:
 
 ```bash
 bash api_host/build/build_dockerfile.sh
@@ -159,7 +163,13 @@ curl --fail-with-body \
   "$STATUS_URL"
 ```
 
-To wait for completion in the submit request instead, use
+  For uploaded archive submissions, send `inputArchive` and `mode` as multipart
+  form data and omit `inputPath` and `outputPath`. After the job succeeds,
+  download `/api/v1/jobs/<jobId>/result` to retrieve a `.tar.gz` of the processed
+  files. See the [API host quickstart](./api_host/doc/quickstart-and-worker-setup.md)
+  for complete upload, polling, and download examples.
+
+  To wait for completion in the submit request instead, use
 `"mode":"synchronous"`; if the configured wait limit is reached, the job
 continues and the response provides a status URL to poll.
 

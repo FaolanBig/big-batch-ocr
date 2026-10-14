@@ -32,7 +32,8 @@ which this implementation does not provide.
 ### 1. Install prerequisites
 
 Use a Linux machine with Docker Engine, the Docker Compose plugin, `curl`,
-`openssl`, and `jq`. The operator must be allowed to access the Docker daemon.
+`openssl`, `jq`, and `sudo` access. The operator must be allowed to access the
+Docker daemon.
 Docker socket access is effectively root-equivalent on that host; only deploy
 this API on a trusted machine and keep the API private. The Compose example
 publishes the API on `127.0.0.1:8080`, not on every network interface.
@@ -44,33 +45,27 @@ docker version
 docker compose version
 ```
 
-### 2. Create the data directory and choose a published OCR image
+### 2. Choose a data root and a published OCR image
 
-Pick an **existing** OCR image tag from the
-[Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
-The version below is an example; replace it with a tag that exists, or use a
-digest-pinned reference for stronger immutability.
-
-```sh
-export DOCKER_DATA_ROOT=/srv/big-batch-ocr-data
-export OCR_IMAGE=ghcr.io/faolanbig/big-batch-ocr:v1.2.3
-sudo install -d -m 0750 -o 65532 -g 65532 "$DOCKER_DATA_ROOT"
-sudo install -d -m 0750 -o 65532 -g 65532 \
-  "$DOCKER_DATA_ROOT/incoming/sample" \
-  "$DOCKER_DATA_ROOT/processed"
-```
+Choose an absolute directory on the Docker daemon's host for
+`DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
+OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
+For example, `ghcr.io/faolanbig/big-batch-ocr:v1.0.0`; replace this with a
+published tag, or use a digest-pinned reference for stronger immutability.
+The OCR image does not need to be pre-pulled: the API host pulls the configured
+image automatically when the first job needs it, if it is not already local.
 
 `DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. The
 container mounts this same host directory at `/data`, and the API maps
 validated relative paths back to that host path for the OCR container.
 Do not point it at a path that is available only inside the API container.
-The API container runs as UID 65532; ensure its input/output directories are
-accessible to that user. The OCR container must also be able to read the input
-and write the output.
 
-Place a test PDF in `incoming/sample` if you want to verify OCR end to end.
-An empty input directory can also be submitted to test container startup and
-job tracking.
+When you use the configurator in step 3, it creates the selected data-root
+directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
+OCR containers. You do not need to create the root manually. To use the
+shared-directory submission method, create the input/output subdirectories
+inside that root and put source files in the input directory. This is not
+needed for archive uploads: the API creates an isolated per-job workspace.
 
 ### 3. Configure runtime credentials
 
@@ -81,8 +76,21 @@ Create the runtime environment file with the interactive configurator:
 ```
 
 The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, and worker settings, then saves `api_host/env/.env` with
-permissions `600`. Use the OCR image and data-root values selected in step 2.
+Docker data root, and worker settings, creates the data-root directory with
+permissions for the containers, then saves `api_host/env/.env` with mode
+`600`. Enter the image and data-root values selected in step 2.
+For the shared-directory example later in this guide, create its child
+directories after configuration (replace the root if you selected a different
+one):
+
+```sh
+sudo install -d -m 0750 -o 65532 -g 65532 \
+  /srv/big-batch-ocr-data/incoming/sample \
+  /srv/big-batch-ocr-data/processed
+```
+
+Skip this for archive uploads; they do not require pre-created input or output
+directories.
 Keep `API_KEY` protected; do not commit it or put it into a Docker build
 argument. Authentication is required unless `ALLOW_ANONYMOUS=true` is
 explicitly set. Do not enable anonymous mode on an exposed network. If you use
@@ -100,6 +108,12 @@ Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
 `DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`; use plain `KEY=VALUE`
 entries without `export` or shell command substitutions. The API key can be
 generated with `openssl rand -hex 32`.
+The manual template workflow does not create the host data root; create it
+with permissions for UID/GID 65532 before starting the service:
+
+```sh
+sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
+```
 
 If Docker socket permissions prevent the API container from connecting,
 resolve access through your host's Docker administration policy. Do not make
@@ -174,7 +188,9 @@ confirm that the Docker daemon or OCR image is available.
 Paths are relative to `DATA_ROOT` (`/data` in Compose), not arbitrary host
 paths. Existing input and output directories are required by default. Set
 `createDestination` to `true` only when the API should create a missing output
-directory beneath the data root.
+directory beneath the data root. Alternatively, upload a `.tar.gz` archive
+and let the API create per-job input/output folders without specifying either
+path.
 
 Submit asynchronously:
 
@@ -219,8 +235,8 @@ terminal result or a `504` containing the accepted job ID and status URL. The
 job is not cancelled at the wait limit; poll its status URL.
 
 Instead of placing input files on the shared data volume manually, upload a
-`.tar.gz` archive as multipart form data. Set `mode` and optionally
-`createDestination`; do not set `inputPath` or `outputPath`. The API creates a
+`.tar.gz` archive as multipart form data. Set `mode`; do not set `inputPath` or
+`outputPath`. The API creates a
 private workspace under `.api-host/jobs/<jobId>/` with separate `input` and
 `output` directories:
 
