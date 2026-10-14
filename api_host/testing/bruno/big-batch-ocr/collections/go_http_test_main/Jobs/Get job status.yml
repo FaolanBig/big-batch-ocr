@@ -7,12 +7,7 @@ info:
 
 http:
   method: GET
-  url: "{{baseUrl}}/api/v1/jobs/:jobId"
-  params:
-    - name: jobId
-      value: job_01J9M7X2K6
-      type: path
-      description: Identifier returned when the job was submitted.
+  url: "{{baseUrl}}/api/v1/jobs/{{jobId}}"
   auth: inherit
 
 settings:
