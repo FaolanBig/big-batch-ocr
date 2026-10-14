@@ -134,7 +134,7 @@
             "$ref": "#/components/responses/BadRequest"
           },
           "413": {
-            "description": "The request body exceeds the 1 GiB upload limit.",
+            "description": "The request body exceeds its size limit: 1 GiB for multipart requests and 1 MiB for JSON requests.",
             "content": {
               "application/problem+json": {
                 "schema": {

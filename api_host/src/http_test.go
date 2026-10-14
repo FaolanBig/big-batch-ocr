@@ -9,9 +9,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +44,7 @@ func testAPI(t *testing.T, executor testExecutor, wait time.Duration) (*API, *Jo
 	jobs := NewJobService(store, executor, 1, logger)
 	jobs.Start()
 	cfg := Config{
-		APIKey: "test-key", DataRoot: root, DockerDataRoot: "/daemon/data",
+		APIKey: "test-key", DataRoot: root, DockerDataRoot: root,
 		SyncWaitLimit: wait,
 	}
 	api := NewAPI(cfg, jobs, store, logger)
@@ -160,7 +160,7 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	body, contentType := multipartArchiveRequest(t, testArchive(t, "invoices/invoice.pdf", "source pdf"), true)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
 	request.Header.Set("Content-Type", contentType)
-	request.Header.Set("Authorization", "******")
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	response := httptest.NewRecorder()
 	api.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -178,7 +178,7 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 
 	download := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
-	request.Header.Set("Authorization", "******")
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	api.ServeHTTP(download, request)
 	if download.Code != http.StatusOK {
 		t.Fatalf("download status = %d, body: %s", download.Code, download.Body.String())
@@ -220,7 +220,7 @@ func TestMultipartArchiveRejectsTraversal(t *testing.T) {
 	body, contentType := multipartArchiveRequest(t, testArchive(t, "../outside.txt", "unsafe"), true)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
 	request.Header.Set("Content-Type", contentType)
-	request.Header.Set("Authorization", "******")
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	response := httptest.NewRecorder()
 	api.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"INVALID_ARCHIVE"`) {
@@ -255,7 +255,7 @@ func TestJobResultRequiresSuccessfulJob(t *testing.T) {
 	<-started
 	download := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, accepted.StatusURL+"/result", nil)
-	request.Header.Set("Authorization", "******")
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	api.ServeHTTP(download, request)
 	if download.Code != http.StatusConflict || !strings.Contains(download.Body.String(), `"code":"JOB_NOT_COMPLETED"`) {
 		t.Fatalf("incomplete result response = %d, body: %s", download.Code, download.Body.String())

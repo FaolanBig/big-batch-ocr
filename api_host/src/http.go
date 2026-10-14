@@ -28,11 +28,11 @@ type API struct {
 }
 
 type submitRequest struct {
-	InputPath         string          `json:"inputPath"`
-	OutputPath        string          `json:"outputPath"`
-	Mode              string          `json:"mode"`
-	CreateDestination json.RawMessage `json:"createDestination"`
-	CreateDestinationValue bool       `json:"-"`
+	InputPath              string          `json:"inputPath"`
+	OutputPath             string          `json:"outputPath"`
+	Mode                   string          `json:"mode"`
+	CreateDestination      json.RawMessage `json:"createDestination"`
+	CreateDestinationValue bool            `json:"-"`
 }
 
 type acknowledgement struct {
@@ -95,6 +95,12 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		defer r.MultipartForm.RemoveAll()
 	}
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeProblem(w, http.StatusRequestEntityTooLarge, "Request too large", "REQUEST_TOO_LARGE",
+				"The request body exceeds its size limit.")
+			return
+		}
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
 		return
@@ -110,7 +116,9 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() {
 			if uploadDirectory != "" {
-				_ = os.RemoveAll(uploadDirectory)
+				if err := os.RemoveAll(uploadDirectory); err != nil {
+					a.logger.Warn("could not remove rejected archive upload", "error", err)
+				}
 			}
 		}()
 		input, openErr := archive.Open()
