@@ -52,14 +52,14 @@ tmux new -s ocr
 In the tmux session, run:
 
 ```bash
-bash src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
+bash ocr_batcher/src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
 ```
 
 You can set the number of OCRmyPDF worker threads with `OCR_JOBS` (default:
 75% of the available logical CPUs):
 
 ```bash
-OCR_JOBS=4 bash src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
+OCR_JOBS=4 bash ocr_batcher/src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
 ```
 
 The source directory must exist. The output directory is created if needed.
