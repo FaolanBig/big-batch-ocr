@@ -54,13 +54,14 @@ trusted operators. The host only accepts input/output paths relative to
 `DATA_ROOT`; it does not expose arbitrary Docker options, images, mounts, or
 host paths to callers.
 
-Create the host data directory and make it accessible to the API container
-(UID 65532 in the distroless runtime). `DOCKER_DATA_ROOT` is the absolute host
-path as seen by the Docker daemon; the Compose bind mounts that host directory
-at `/data` inside the API container. Keep the two roots aligned as shown so a
-validated relative path maps to the same host files for the OCR container.
-Input is bind-mounted read-only at `/source`; output is read-write at
-`/destination`.
+`DOCKER_DATA_ROOT` is the absolute host path as seen by the Docker daemon; the
+Compose bind mounts that host directory at `/data` inside the API container.
+Keep the two roots aligned as shown so a validated relative path maps to the
+same host files for the OCR container. The configurator creates the selected
+data-root directory with mode `0750` and owner UID/GID `65532`, used by the API
+and OCR containers. If you use the manual `.env` template workflow, create the
+root yourself with the same ownership and permissions. Input is bind-mounted
+read-only at `/source`; output is read-write at `/destination`.
 
 The named `api-host-state` volume persists the SQLite job database. Back it up
 with the host data. It retains container IDs and the last 32 KiB of captured
@@ -76,15 +77,17 @@ Create the runtime environment file with the guided configurator:
 
 ```sh
 ./api_host/config/configure_api_host.sh
-sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
 ```
 
 The configurator prompts for an OCR image, API key (or generates one),
 Docker-visible data root, worker settings, and anonymous-access choice. It
 saves the file as `api_host/env/.env` with mode `600`. The data-root directory
-must be accessible to both the API and OCR containers. The configurator
-detects the socket group ID when available; the run launcher detects it at
-startup.
+is created by the configurator and made accessible to both the API and OCR
+containers. The configurator detects the socket group ID when available; the
+run launcher detects it at startup.
+The selected OCR image does not need to be present locally when configuring:
+the API host checks for it when the first job starts and pulls it if needed.
+The Docker daemon must be able to reach the image registry for this first pull.
 
 Alternatively, manually copy and edit the template:
 
@@ -156,9 +159,9 @@ the other before accepting a job.
 
 To upload the input instead of staging it on the shared volume, send a
 multipart form request with `inputArchive` set to a `.tar.gz` file. Provide
-`mode` and optionally `createDestination`; omit both `inputPath` and
-`outputPath`. The API creates an isolated `.api-host/jobs/<jobId>/` workspace
-with separate `input` and `output` directories:
+`mode`; omit both `inputPath` and `outputPath`. The API creates an isolated
+`.api-host/jobs/<jobId>/` workspace with separate `input` and `output`
+directories:
 
 ```sh
 curl --fail-with-body -i \
