@@ -219,9 +219,10 @@ terminal result or a `504` containing the accepted job ID and status URL. The
 job is not cancelled at the wait limit; poll its status URL.
 
 Instead of placing input files on the shared data volume manually, upload a
-`.tar.gz` archive as multipart form data. Set `outputPath`, `mode`, and
-optionally `createDestination` as form fields. `inputPath` is not required
-when `inputArchive` is provided:
+`.tar.gz` archive as multipart form data. Set `mode` and optionally
+`createDestination`; do not set `inputPath` or `outputPath`. The API creates a
+private workspace under `.api-host/jobs/<jobId>/` with separate `input` and
+`output` directories:
 
 ```sh
 tar -czf /tmp/invoices.tar.gz -C ./invoices .
@@ -229,9 +230,7 @@ response="$(
   curl --fail-with-body --silent --show-error \
     -H "Authorization: ******" \
     -F "inputArchive=@/tmp/invoices.tar.gz" \
-    -F "outputPath=processed/uploaded-invoices" \
     -F "mode=asynchronous" \
-    -F "createDestination=true" \
     http://127.0.0.1:8080/api/v1/jobs
 )"
 printf '%s\n' "$response" | jq .
@@ -256,7 +255,10 @@ curl --fail-with-body --silent --show-error \
 ```
 
 The result is generated from the job's output directory when requested. The
-output directory remains on the shared data volume as before.
+job-specific workspace, including its extracted input, is removed after the
+download succeeds. A later download attempt for that uploaded job returns
+`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
+JSON request, result downloads do not remove the shared output directory.
 
 ### 6. Monitor and stop the service
 

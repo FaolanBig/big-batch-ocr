@@ -156,16 +156,15 @@ the other before accepting a job.
 
 To upload the input instead of staging it on the shared volume, send a
 multipart form request with `inputArchive` set to a `.tar.gz` file. Provide
-`outputPath` and `mode` as form fields, plus `createDestination` when needed;
-do not include `inputPath` in the same request:
+`mode` and optionally `createDestination`; omit both `inputPath` and
+`outputPath`. The API creates an isolated `.api-host/jobs/<jobId>/` workspace
+with separate `input` and `output` directories:
 
 ```sh
 curl --fail-with-body -i \
   -H "Authorization: ******" \
   -F "inputArchive=@invoices.tar.gz" \
-  -F "outputPath=processed/invoices" \
   -F "mode=asynchronous" \
-  -F "createDestination=true" \
   http://127.0.0.1:8080/api/v1/jobs
 ```
 
@@ -185,8 +184,11 @@ curl --fail-with-body \
 ```
 
 The result endpoint returns all files under the job's output directory as a
-`.tar.gz` archive. It returns `409 JOB_NOT_COMPLETED` until the job succeeds;
-the shared output directory remains available on the server.
+`.tar.gz` archive. It returns `409 JOB_NOT_COMPLETED` until the job succeeds.
+After the download succeeds, the uploaded job's private workspace (including
+its extracted input) is deleted; another result request returns
+`410 JOB_RESULT_CONSUMED`. Existing jobs submitted with `inputPath` continue
+using the shared output directory, which is not deleted by downloads.
 
 ### Workato-style HTTP actions
 

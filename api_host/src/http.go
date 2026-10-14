@@ -106,10 +106,18 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var uploadDirectory string
+	var uploadedJobID string
 	if archive != nil {
-		uploadDirectory, err = createUploadDirectory(a.config.DataRoot)
+		uploadedJobID, err = newJobID()
 		if err != nil {
-			a.logger.Error("could not create archive upload directory", "error", err)
+			a.logger.Error("could not allocate OCR job ID", "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"The input archive could not be accepted.")
+			return
+		}
+		uploadDirectory, err = createJobWorkspace(a.config.DataRoot, uploadedJobID)
+		if err != nil {
+			a.logger.Error("could not create archive job workspace", "job_id", uploadedJobID, "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
 				"The input archive could not be accepted.")
 			return
@@ -127,14 +135,15 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
 			return
 		}
-		extractErr := extractTarGzip(input, uploadDirectory)
+		inputDirectory := filepath.Join(uploadDirectory, "input")
+		extractErr := extractTarGzip(input, inputDirectory)
 		closeErr := input.Close()
 		if err := errors.Join(extractErr, closeErr); err != nil {
 			writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
 				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
 			return
 		}
-		relative, err := filepath.Rel(a.config.DataRoot, uploadDirectory)
+		relative, err := filepath.Rel(a.config.DataRoot, inputDirectory)
 		if err != nil {
 			a.logger.Error("could not resolve archive upload path", "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
@@ -142,6 +151,7 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		request.InputPath = filepath.ToSlash(relative)
+		request.OutputPath = filepath.ToSlash(filepath.Join(".api-host", "jobs", uploadedJobID, "output"))
 	}
 	if strings.TrimSpace(request.InputPath) == "" || strings.TrimSpace(request.OutputPath) == "" ||
 		(request.Mode != "synchronous" && request.Mode != "asynchronous") {
@@ -161,7 +171,12 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The input and destination must satisfy the configured data-root directory rules.")
 		return
 	}
-	job, err := a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	var job Job
+	if uploadedJobID != "" {
+		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	} else {
+		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	}
 	if err != nil {
 		a.logger.Error("could not persist OCR job", "error", err)
 		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
@@ -208,7 +223,7 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		if err != nil {
 			return submitRequest{}, nil, err
 		}
-		outputPath, err := multipartTextField(r, "outputPath", true)
+		outputPath, err := multipartTextField(r, "outputPath", false)
 		if err != nil {
 			return submitRequest{}, nil, err
 		}
@@ -238,6 +253,9 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 			}
 			if inputPath != "" {
 				return submitRequest{}, nil, errors.New("inputPath and inputArchive are mutually exclusive")
+			}
+			if outputPath != "" {
+				return submitRequest{}, nil, errors.New("outputPath is assigned internally for uploaded archives")
 			}
 		}
 		if archive == nil && inputPath == "" {
@@ -283,36 +301,64 @@ func multipartTextField(r *http.Request, key string, required bool) (string, err
 	return values[0], nil
 }
 
-func createUploadDirectory(dataRoot string) (string, error) {
+func createJobWorkspace(dataRoot, jobID string) (string, error) {
 	root, err := filepath.EvalSymlinks(dataRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve data root: %w", err)
 	}
-	parent := filepath.Join(root, ".api-host")
-	if err := os.Mkdir(parent, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", fmt.Errorf("create private data directory: %w", err)
+	privateRoot := filepath.Join(root, ".api-host")
+	jobsRoot := filepath.Join(privateRoot, "jobs")
+	for _, directory := range []string{privateRoot, jobsRoot} {
+		if err := os.Mkdir(directory, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("create private job directory: %w", err)
+		}
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("private job path is not a real directory")
+		}
 	}
-	info, err := os.Lstat(parent)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("private data directory is not a real directory")
+	directory := filepath.Join(jobsRoot, jobID)
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		return "", fmt.Errorf("create job workspace: %w", err)
 	}
-	uploadRoot := filepath.Join(parent, "uploads")
-	if err := os.Mkdir(uploadRoot, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", fmt.Errorf("create upload directory: %w", err)
-	}
-	info, err = os.Lstat(uploadRoot)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("upload directory is not a real directory")
-	}
-	directory, err := os.MkdirTemp(uploadRoot, "job-")
-	if err != nil {
-		return "", fmt.Errorf("create job upload directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o750); err != nil {
-		_ = os.RemoveAll(directory)
-		return "", fmt.Errorf("set upload directory permissions: %w", err)
+	for _, subdirectory := range []string{"input", "output"} {
+		if err := os.Mkdir(filepath.Join(directory, subdirectory), 0o750); err != nil {
+			cleanupErr := os.RemoveAll(directory)
+			return "", errors.Join(fmt.Errorf("create job %s directory: %w", subdirectory, err), cleanupErr)
+		}
 	}
 	return directory, nil
+}
+
+func isUploadedJob(job Job) bool {
+	jobRoot := filepath.Join(".api-host", "jobs", job.ID)
+	return filepath.Clean(filepath.FromSlash(job.InputPath)) == filepath.Join(jobRoot, "input") &&
+		filepath.Clean(filepath.FromSlash(job.OutputPath)) == filepath.Join(jobRoot, "output")
+}
+
+func removeUploadedJobWorkspace(dataRoot string, job Job) error {
+	if !isUploadedJob(job) {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(dataRoot)
+	if err != nil {
+		return fmt.Errorf("resolve data root: %w", err)
+	}
+	jobsRoot := filepath.Join(root, ".api-host", "jobs")
+	jobDirectory := filepath.Join(jobsRoot, job.ID)
+	if !within(jobsRoot, jobDirectory) || filepath.Base(jobDirectory) != job.ID {
+		return errors.New("job workspace path is invalid")
+	}
+	for _, directory := range []string{filepath.Dir(jobsRoot), jobsRoot} {
+		info, err := os.Lstat(directory)
+		if err != nil {
+			return fmt.Errorf("inspect job workspace parent: %w", err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("job workspace parent is not a real directory")
+		}
+	}
+	return os.RemoveAll(jobDirectory)
 }
 
 func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id string) {
@@ -418,6 +464,11 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
 	}
+	if errors.Is(err, os.ErrNotExist) && isUploadedJob(job) {
+		writeProblem(w, http.StatusGone, "Job result already downloaded", "JOB_RESULT_CONSUMED",
+			"The uploaded job workspace was removed after its result was downloaded.")
+		return
+	}
 	if err != nil || !within(root, resultDirectory) {
 		a.logger.Error("job result path is no longer valid", "job_id", id)
 		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
@@ -473,6 +524,10 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", archiveInfo.Size()))
 	if _, err := io.Copy(w, file); err != nil {
 		a.logger.Warn("could not send job result archive", "job_id", id, "error", err)
+		return
+	}
+	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
+		a.logger.Error("could not remove downloaded archive job workspace", "job_id", id, "error", err)
 	}
 }
 

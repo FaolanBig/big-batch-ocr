@@ -336,6 +336,23 @@
           "409": {
             "$ref": "#/components/responses/JobNotCompleted"
           },
+          "410": {
+            "description": "An uploaded job result was already downloaded and its private workspace has been removed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Job result already downloaded",
+                  "status": 410,
+                  "code": "JOB_RESULT_CONSUMED",
+                  "detail": "The uploaded job workspace was removed after its result was downloaded."
+                }
+              }
+            }
+          },
           "500": {
             "description": "The output directory could not be packaged for download.",
             "content": {
@@ -435,7 +452,7 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow, or inputArchive for a .tar.gz upload. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
@@ -445,7 +462,7 @@
           "inputArchive": {
             "type": "string",
             "format": "binary",
-            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath."
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job output directory."
           },
           "outputPath": {
             "type": "string",
@@ -464,13 +481,13 @@
           }
         },
         "required": [
-          "outputPath",
           "mode"
         ],
         "oneOf": [
           {
             "required": [
-              "inputPath"
+              "inputPath",
+              "outputPath"
             ],
             "not": {
               "required": [
@@ -483,8 +500,17 @@
               "inputArchive"
             ],
             "not": {
-              "required": [
-                "inputPath"
+              "anyOf": [
+                {
+                  "required": [
+                    "inputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputPath"
+                  ]
+                }
               ]
             }
           }

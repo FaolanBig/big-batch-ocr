@@ -143,6 +143,9 @@ func TestAsyncJobThenStatusAndSyncSuccess(t *testing.T) {
 
 func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	api, _, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if filepath.Base(filepath.Dir(job.InputHost)) != job.ID || filepath.Base(filepath.Dir(job.OutputHost)) != job.ID {
+			return 1, errors.New("uploaded job paths are not isolated by job ID")
+		}
 		input, err := os.ReadFile(filepath.Join(job.InputHost, "invoices", "invoice.pdf"))
 		if err != nil {
 			return 1, err
@@ -156,6 +159,9 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 		return 0, os.WriteFile(filepath.Join(job.OutputHost, "recognized.txt"), []byte("recognized text"), 0o640)
 	}}, time.Second)
 	defer cleanup()
+	if err := os.WriteFile(filepath.Join(api.config.DataRoot, "output", "previous-job.txt"), []byte("keep me"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 
 	body, contentType := multipartArchiveRequest(t, testArchive(t, "invoices/invoice.pdf", "source pdf"), true)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
@@ -207,6 +213,21 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	}
 	if string(content) != "recognized text" {
 		t.Fatalf("downloaded file content = %q", content)
+	}
+	jobDirectory := filepath.Join(api.config.DataRoot, ".api-host", "jobs", result.JobID)
+	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded job workspace still exists after download: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(api.config.DataRoot, "output", "previous-job.txt")); err != nil {
+		t.Fatalf("existing shared output was unexpectedly removed: %v", err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	consumed := httptest.NewRecorder()
+	api.ServeHTTP(consumed, request)
+	if consumed.Code != http.StatusGone {
+		t.Fatalf("second result download status = %d, body: %s", consumed.Code, consumed.Body.String())
 	}
 }
 
@@ -418,9 +439,6 @@ func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*b
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("outputPath", "output"); err != nil {
-		t.Fatal(err)
-	}
 	if err := writer.WriteField("mode", "synchronous"); err != nil {
 		t.Fatal(err)
 	}
@@ -432,8 +450,13 @@ func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*b
 		if _, err := part.Write(archive); err != nil {
 			t.Fatal(err)
 		}
-	} else if err := writer.WriteField("inputPath", "input"); err != nil {
-		t.Fatal(err)
+	} else {
+		if err := writer.WriteField("inputPath", "input"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.WriteField("outputPath", "output"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
