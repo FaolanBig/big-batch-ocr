@@ -154,6 +154,40 @@ explicitly create a missing output path and its parent directories, include
 unreadable input, identical directories, and either directory nested inside
 the other before accepting a job.
 
+To upload the input instead of staging it on the shared volume, send a
+multipart form request with `inputArchive` set to a `.tar.gz` file. Provide
+`outputPath` and `mode` as form fields, plus `createDestination` when needed;
+do not include `inputPath` in the same request:
+
+```sh
+curl --fail-with-body -i \
+  -H "Authorization: ******" \
+  -F "inputArchive=@invoices.tar.gz" \
+  -F "outputPath=processed/invoices" \
+  -F "mode=asynchronous" \
+  -F "createDestination=true" \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+The complete multipart request is limited to 1 GiB and archive extraction to
+10 GiB. The server rejects links and archive paths that escape the extraction
+directory. The JSON request with `inputPath` remains supported for files
+already present under `DATA_ROOT`.
+
+After polling until `status` is `succeeded`, download the output bundle using
+the `jobId` returned by submission:
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: ******" \
+  "http://127.0.0.1:8080/api/v1/jobs/job_ID_FROM_RESPONSE/result" \
+  -o result.tar.gz
+```
+
+The result endpoint returns all files under the job's output directory as a
+`.tar.gz` archive. It returns `409 JOB_NOT_COMPLETED` until the job succeeds;
+the shared output directory remains available on the server.
+
 ### Workato-style HTTP actions
 
 Configure a POST action with the API URL, JSON content type, and a bearer

@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. All input and output directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be selected from a shared directory or uploaded as a tar.gz archive; successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -70,6 +70,16 @@
                   }
                 }
               }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitMultipartJobRequest"
+              },
+              "encoding": {
+                "inputArchive": {
+                  "contentType": "application/gzip, application/x-gzip, application/octet-stream"
+                }
+              }
             }
           }
         },
@@ -122,6 +132,16 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "The request body exceeds the 1 GiB upload limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -273,6 +293,62 @@
         }
       }
     },
+    "/api/v1/jobs/{jobId}/result": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "downloadOcrJobResult",
+        "summary": "Download processed files",
+        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; the job's output directory remains on the configured shared data volume.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Processed output archive.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Suggested download filename.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "attachment; filename=\"job_01J9M7X2K6.tar.gz\""
+              }
+            },
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/JobNotCompleted"
+          },
+          "500": {
+            "description": "The output directory could not be packaged for download.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -356,6 +432,63 @@
             "description": "When true, the host may create the missing destination directory, and any missing parent directories, only beneath the configured data root. When omitted or false, a missing destination is rejected."
           }
         }
+      },
+      "SubmitMultipartJobRequest": {
+        "type": "object",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow, or inputArchive for a .tar.gz upload. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "properties": {
+          "inputPath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive."
+          },
+          "inputArchive": {
+            "type": "string",
+            "format": "binary",
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath."
+          },
+          "outputPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "synchronous",
+              "asynchronous"
+            ]
+          },
+          "createDestination": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "outputPath",
+          "mode"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "inputPath"
+            ],
+            "not": {
+              "required": [
+                "inputArchive"
+              ]
+            }
+          },
+          {
+            "required": [
+              "inputArchive"
+            ],
+            "not": {
+              "required": [
+                "inputPath"
+              ]
+            }
+          }
+        ]
       },
       "JobAcknowledgement": {
         "type": "object",
@@ -730,6 +863,23 @@
               "status": 404,
               "code": "JOB_NOT_FOUND",
               "detail": "No job was found for the supplied identifier."
+            }
+          }
+        },
+        "JobNotCompleted": {
+          "description": "The job exists, but its output archive is available only after successful completion.",
+          "content": {
+            "application/problem+json": {
+              "schema": {
+                "$ref": "#/components/schemas/Problem"
+              },
+              "example": {
+                "type": "about:blank",
+                "title": "Job result unavailable",
+                "status": 409,
+                "code": "JOB_NOT_COMPLETED",
+                "detail": "The processed files are available only after the job succeeds."
+              }
             }
           }
         }
