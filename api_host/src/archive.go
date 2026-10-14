@@ -15,12 +15,22 @@ import (
 
 const maxExtractedArchiveBytes int64 = 10 << 30
 
-func extractTarGzip(source io.Reader, destination string) error {
+func extractTarGzip(source io.Reader, destination string) (resultErr error) {
 	gzipReader, err := gzip.NewReader(source)
 	if err != nil {
 		return fmt.Errorf("open gzip archive: %w", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, gzipReader.Close())
+	}()
+
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		return fmt.Errorf("open archive extraction root: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, root.Close())
+	}()
 
 	reader := tar.NewReader(gzipReader)
 	var extractedBytes int64
@@ -42,25 +52,27 @@ func extractTarGzip(source io.Reader, destination string) error {
 			}
 			continue
 		}
-		target := filepath.Join(destination, filepath.FromSlash(name))
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o750); err != nil {
+			if err := root.MkdirAll(name, 0o750); err != nil {
 				return fmt.Errorf("create archive directory: %w", err)
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			if header.Size < 0 || header.Size > maxExtractedArchiveBytes-extractedBytes {
 				return errors.New("archive exceeds the extraction size limit")
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-				return fmt.Errorf("create archive parent directory: %w", err)
+			parent := path.Dir(name)
+			if parent != "." {
+				if err := root.MkdirAll(parent, 0o750); err != nil {
+					return fmt.Errorf("create archive parent directory: %w", err)
+				}
 			}
-			if _, err := os.Lstat(target); err == nil {
+			if _, err := root.Lstat(name); err == nil {
 				return errors.New("archive contains duplicate paths")
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("inspect archive destination: %w", err)
 			}
-			file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+			file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
 			if err != nil {
 				return fmt.Errorf("create archive file: %w", err)
 			}
