@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -26,11 +28,16 @@ func ValidatePaths(dataRoot, dockerDataRoot, input, output string, createDestina
 	if err != nil {
 		return ValidatedPaths{}, fmt.Errorf("%w: data root is unavailable", ErrInvalidPath)
 	}
-	inputHost, err := resolveInput(root, input)
+	data, err := os.OpenRoot(root)
+	if err != nil {
+		return ValidatedPaths{}, fmt.Errorf("%w: data root is unavailable", ErrInvalidPath)
+	}
+	defer data.Close()
+	inputHost, err := resolveInput(data, root, input)
 	if err != nil {
 		return ValidatedPaths{}, err
 	}
-	outputHost, err := resolveOutput(root, output, createDestination, inputHost)
+	outputHost, err := resolveOutput(data, root, output, createDestination, inputHost)
 	if err != nil {
 		return ValidatedPaths{}, err
 	}
@@ -53,11 +60,12 @@ func ValidatePaths(dataRoot, dockerDataRoot, input, output string, createDestina
 	}, nil
 }
 
-func resolveInput(root, requestPath string) (string, error) {
-	candidate, err := resolveRelative(root, requestPath)
+func resolveInput(data *os.Root, root, requestPath string) (string, error) {
+	relative, err := safeRelativePath(root, requestPath)
 	if err != nil {
 		return "", err
 	}
+	candidate := filepath.Join(root, filepath.FromSlash(relative))
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
 		return "", fmt.Errorf("%w: input directory does not exist", ErrInvalidPath)
@@ -65,14 +73,19 @@ func resolveInput(root, requestPath string) (string, error) {
 	if !within(root, resolved) {
 		return "", fmt.Errorf("%w: input directory is outside the data root", ErrInvalidPath)
 	}
-	info, err := os.Stat(resolved)
+	resolvedRelative, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return "", fmt.Errorf("%w: input path could not be resolved", ErrInvalidPath)
+	}
+	resolvedRelative = filepath.ToSlash(resolvedRelative)
+	info, err := data.Stat(resolvedRelative)
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("%w: input must be a directory", ErrInvalidPath)
 	}
 	if info.Mode().Perm()&0o444 == 0 || info.Mode().Perm()&0o111 == 0 {
 		return "", fmt.Errorf("%w: input directory is not readable", ErrInvalidPath)
 	}
-	dir, err := os.Open(resolved)
+	dir, err := data.Open(resolvedRelative)
 	if err != nil {
 		return "", fmt.Errorf("%w: input directory is not readable", ErrInvalidPath)
 	}
@@ -83,18 +96,26 @@ func resolveInput(root, requestPath string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func resolveOutput(root, requestPath string, create bool, inputHost string) (string, error) {
-	candidate, err := resolveRelative(root, requestPath)
+func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHost string) (string, error) {
+	relative, err := safeRelativePath(root, requestPath)
 	if err != nil {
 		return "", err
 	}
+	candidate := filepath.Join(root, filepath.FromSlash(relative))
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err == nil {
 		if !within(root, resolved) {
 			return "", fmt.Errorf("%w: destination is outside the data root", ErrInvalidPath)
 		}
-		info, statErr := os.Stat(resolved)
-		if statErr != nil || !info.IsDir() {
+		resolvedRelative, relErr := filepath.Rel(root, resolved)
+		if relErr != nil {
+			return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
+		}
+		info, statErr := data.Stat(filepath.ToSlash(resolvedRelative))
+		if statErr != nil {
+			return "", fmt.Errorf("%w: destination could not be inspected", ErrInvalidPath)
+		}
+		if !info.IsDir() {
 			return "", fmt.Errorf("%w: destination must be a directory", ErrInvalidPath)
 		}
 		return filepath.Clean(resolved), nil
@@ -102,27 +123,30 @@ func resolveOutput(root, requestPath string, create bool, inputHost string) (str
 	if !errors.Is(err, os.ErrNotExist) || !create {
 		return "", fmt.Errorf("%w: destination does not exist", ErrInvalidPath)
 	}
-	existing := filepath.Dir(candidate)
+	existing := path.Dir(relative)
 	var resolvedParent string
-	var parentErr error
 	for {
-		resolvedParent, parentErr = filepath.EvalSymlinks(existing)
-		if parentErr == nil {
+		existingHost := filepath.Join(root, filepath.FromSlash(existing))
+		resolvedParent, err = filepath.EvalSymlinks(existingHost)
+		if err == nil {
 			if !within(root, resolvedParent) {
 				return "", fmt.Errorf("%w: destination parent is outside the data root", ErrInvalidPath)
 			}
+			parentRelative, relErr := filepath.Rel(root, resolvedParent)
+			if relErr != nil {
+				return "", fmt.Errorf("%w: destination parent could not be resolved", ErrInvalidPath)
+			}
+			if _, statErr := data.Stat(filepath.ToSlash(parentRelative)); statErr != nil {
+				return "", fmt.Errorf("%w: destination parent could not be inspected", ErrInvalidPath)
+			}
 			break
 		}
-		if !errors.Is(parentErr, os.ErrNotExist) || existing == root {
+		if !errors.Is(err, os.ErrNotExist) || existing == "." {
 			return "", fmt.Errorf("%w: destination parent is outside the data root", ErrInvalidPath)
 		}
-		next := filepath.Dir(existing)
-		if next == existing {
-			return "", fmt.Errorf("%w: destination parent is outside the data root", ErrInvalidPath)
-		}
-		existing = next
+		existing = path.Dir(existing)
 	}
-	missingSuffix, err := filepath.Rel(existing, candidate)
+	missingSuffix, err := filepath.Rel(filepath.FromSlash(existing), filepath.FromSlash(relative))
 	if err != nil {
 		return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
 	}
@@ -130,17 +154,22 @@ func resolveOutput(root, requestPath string, create bool, inputHost string) (str
 	if prospective == inputHost || within(inputHost, prospective) || within(prospective, inputHost) {
 		return "", ErrPathConflict
 	}
-	if err := os.MkdirAll(candidate, 0o750); err != nil {
+	createRelative, err := filepath.Rel(root, prospective)
+	if err != nil {
+		return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
+	}
+	createRelative = filepath.ToSlash(createRelative)
+	if err := data.MkdirAll(createRelative, 0o750); err != nil {
 		return "", fmt.Errorf("%w: destination could not be created", ErrInvalidPath)
 	}
-	resolved, err = filepath.EvalSymlinks(candidate)
-	if err != nil || !within(root, resolved) {
-		return "", fmt.Errorf("%w: created destination is outside the data root", ErrInvalidPath)
+	info, err := data.Stat(createRelative)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%w: created destination could not be verified", ErrInvalidPath)
 	}
-	return filepath.Clean(resolved), nil
+	return filepath.Clean(prospective), nil
 }
 
-func resolveRelative(root, requestPath string) (string, error) {
+func safeRelativePath(root, requestPath string) (string, error) {
 	if strings.TrimSpace(requestPath) == "" || filepath.IsAbs(requestPath) {
 		return "", fmt.Errorf("%w: paths must be non-empty and relative", ErrInvalidPath)
 	}
@@ -148,11 +177,23 @@ func resolveRelative(root, requestPath string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: path must stay beneath the data root", ErrInvalidPath)
 	}
+	relative := filepath.ToSlash(clean)
+	if !fs.ValidPath(relative) {
+		return "", fmt.Errorf("%w: path must stay beneath the data root", ErrInvalidPath)
+	}
 	candidate := filepath.Join(root, clean)
 	if !within(root, candidate) {
 		return "", fmt.Errorf("%w: path must stay beneath the data root", ErrInvalidPath)
 	}
-	return candidate, nil
+	return relative, nil
+}
+
+func resolveRelative(root, requestPath string) (string, error) {
+	relative, err := safeRelativePath(root, requestPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, filepath.FromSlash(relative)), nil
 }
 
 func within(root, path string) bool {

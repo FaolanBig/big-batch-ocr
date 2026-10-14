@@ -80,6 +80,46 @@ func TestValidatePathsPreservesSymlinkThatStaysInsideRoot(t *testing.T) {
 	}
 }
 
+func TestValidatePathsCreatesDestinationBeneathInRootSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "input"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "real-output"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real-output"), filepath.Join(root, "output-alias")); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ValidatePaths(root, "/daemon/data", "input", "output-alias/nested/out", true)
+	if err != nil {
+		t.Fatalf("create destination beneath in-root symlink: %v", err)
+	}
+	if paths.OutputHost != "/daemon/data/real-output/nested/out" {
+		t.Fatalf("output host path = %q", paths.OutputHost)
+	}
+	if info, err := os.Stat(filepath.Join(root, "real-output", "nested", "out")); err != nil || !info.IsDir() {
+		t.Fatalf("destination beneath symlink was not created: info=%v err=%v", info, err)
+	}
+}
+
+func TestValidatePathsRejectsDestinationSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "input"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidatePaths(root, "/daemon/data", "input", "outside/new/output", true); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("destination symlink escape error = %v, want ErrInvalidPath", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside destination was created: %v", err)
+	}
+}
+
 func TestValidatePathsRejectsUnreadableInput(t *testing.T) {
 	root := t.TempDir()
 	input := filepath.Join(root, "in")
