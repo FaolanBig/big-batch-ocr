@@ -1,0 +1,31 @@
+info:
+  name: start_ocr_job
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/jobs"
+  body:
+    type: json
+    data: |-
+      {
+        "inputPath": "incoming/sample",
+        "outputPath": "processed/sample",
+        "mode": "asynchronous"
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        const data = res.getBody();
+        bru.setEnvVar("jobId", data.jobId);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
