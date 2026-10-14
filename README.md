@@ -45,6 +45,7 @@ It requires Bash, OCRmyPDF and its dependencies, `tmux`, and common Linux
 utilities. Start it from an existing tmux session:
 
 ```bash
+git clone https://github.com/FaolanBig/big-batch-ocr.git
 cd ocr_batcher
 tmux new -s ocr
 ```
