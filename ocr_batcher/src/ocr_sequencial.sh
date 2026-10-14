@@ -19,7 +19,14 @@ set -Eeuo pipefail
 ### Configuration ###
 #####################
 
-SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="${0##*/}"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if [[ "$SCRIPT_PATH" == */* ]]; then
+    SCRIPT_DIR="${SCRIPT_PATH%/*}"
+else
+    SCRIPT_DIR="."
+fi
+DEPENDENCY_INSTALLER="$SCRIPT_DIR/../dependencies/install_dependencies.sh"
 
 SOURCE_DIR="${1:-}"
 TARGET_DIR="${2:-}"
@@ -123,18 +130,51 @@ if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
     die "Usage: $SCRIPT_NAME <source_dir> <target_dir>"
 fi
 
-command -v ocrmypdf >/dev/null \
-    || die "ocrmypdf not found"
+REQUIRED_COMMANDS=(
+    ocrmypdf tmux realpath sha256sum cmp find nproc
+    cat cp date dirname mkdir mktemp mv rm sleep tail tee touch
+)
+MISSING_COMMANDS=()
+for command_name in "${REQUIRED_COMMANDS[@]}"; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        MISSING_COMMANDS+=("$command_name")
+    fi
+done
 
-command -v tmux >/dev/null \
-    || die "tmux not found"
+if (( ${#MISSING_COMMANDS[@]} > 0 )); then
+    if [[ ! -x "$DEPENDENCY_INSTALLER" ]]; then
+        die "Missing dependencies (${MISSING_COMMANDS[*]}) and installer not found or not executable: $DEPENDENCY_INSTALLER"
+    fi
+    echo "[INFO] Missing dependencies: ${MISSING_COMMANDS[*]}"
+    if ! : {TTY_FD}<>/dev/tty 2>/dev/null; then
+        die "Cannot ask for permission to install dependencies without a terminal. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+    fi
+    printf 'Run the distro-specific dependency installer now? [y/N] ' >&"$TTY_FD"
+    if ! read -r -u "$TTY_FD" INSTALL_DEPENDENCIES; then
+        exec {TTY_FD}>&-
+        die "Could not read your response. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+    fi
+    exec {TTY_FD}>&-
+    case "$INSTALL_DEPENDENCIES" in
+        [yY]|[yY][eE][sS])
+            ;;
+        *)
+            die "Dependency installation declined. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+            ;;
+    esac
+    echo "[INFO] Running the distro-specific dependency installer: $DEPENDENCY_INSTALLER"
+    "$DEPENDENCY_INSTALLER" || die "Dependency installation failed."
 
-command -v realpath >/dev/null \
-    || die "realpath not found"
-command -v sha256sum >/dev/null \
-    || die "sha256sum not found"
-command -v cmp >/dev/null \
-    || die "cmp not found"
+    MISSING_COMMANDS=()
+    for command_name in "${REQUIRED_COMMANDS[@]}"; do
+        if ! command -v "$command_name" >/dev/null 2>&1; then
+            MISSING_COMMANDS+=("$command_name")
+        fi
+    done
+    if (( ${#MISSING_COMMANDS[@]} > 0 )); then
+        die "Dependency installation completed, but these commands remain unavailable: ${MISSING_COMMANDS[*]}"
+    fi
+fi
 
 SOURCE_DIR="$(realpath "$SOURCE_DIR")"
 TARGET_DIR="$(realpath -m "$TARGET_DIR")"

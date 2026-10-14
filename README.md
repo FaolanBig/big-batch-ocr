@@ -69,6 +69,22 @@ input. Progress and live OCR output appear in tmux panes. See the
 [batcher guide](./ocr_batcher/README.md) for details, including binary builds,
 logs, error handling, and resume behavior.
 
+For this **bare-metal Bash script only**, missing dependencies are detected at
+startup and the script asks before running the distro-specific installer. The
+installer supports Debian/Ubuntu, openSUSE, Fedora, RHEL, and Arch Linux;
+administrator privileges may be required (Arch requires running as a regular
+user with `sudo` configured). If you decline, install the dependencies
+manually before retrying. This does not apply to the Docker image or API host,
+which use their own dependencies. See
+[`ocr_batcher/dependencies/README.md`](./ocr_batcher/dependencies/README.md)
+for package, license, and copyright details.
+
+Before the bare-metal script can operate, install **Git** and **tmux**. The
+script must run inside a tmux session, so if tmux is missing, run
+`ocr_batcher/dependencies/install_dependencies.sh` manually first, then start
+tmux and launch the script from that session. Git is needed by the Arch
+dependency-install path to fetch OCRmyPDF from the AUR.
+
 ### 2. Run the batcher in Docker
 
 The published image starts OCR automatically. Replace the example tag with a
