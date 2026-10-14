@@ -9,6 +9,12 @@ Fedora, RHEL, or Arch Linux. The installer detects the distribution through
 Run it as root or through `sudo`, except on Arch where it must run as a
 non-root user with `sudo` configured.
 
+**Git and tmux must be available before the bare-metal OCR script can operate.**
+The OCR workflow requires an existing tmux session and cannot run without
+tmux. If tmux is not installed, run this dependency installer manually first;
+then start a tmux session and run `src/ocr_sequencial.sh` inside it. Git is
+required by the Arch installation path to fetch OCRmyPDF's AUR build recipe.
+
 If you decline the prompt, or run the batcher without an interactive terminal,
 the script exits and tells you to run the installer manually. Installation can
 request administrator authentication and may upgrade packages (the Arch

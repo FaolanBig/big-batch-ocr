@@ -78,6 +78,12 @@ which use their own dependencies. See
 [`ocr_batcher/dependencies/README.md`](./ocr_batcher/dependencies/README.md)
 for package, license, and copyright details.
 
+Before the bare-metal script can operate, install **Git** and **tmux**. The
+script must run inside a tmux session, so if tmux is missing, run
+`ocr_batcher/dependencies/install_dependencies.sh` manually first, then start
+tmux and launch the script from that session. Git is needed by the Arch
+dependency-install path to fetch OCRmyPDF from the AUR.
+
 ### 2. Run the batcher in Docker
 
 The published image starts OCR automatically. Replace the example tag with a
