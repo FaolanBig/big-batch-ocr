@@ -14,9 +14,6 @@ http:
         value:
           - \\wsl.localhost\Ubuntu-24.04\home\fb\test\compressed_pdfs.tar.gz
         contentType: application/gzip
-      - name: outputPath
-        type: text
-        value: processed/sample
       - name: mode
         type: text
         value: asynchronous

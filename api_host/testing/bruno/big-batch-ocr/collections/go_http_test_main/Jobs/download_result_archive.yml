@@ -1,5 +1,5 @@
 info:
-  name: fetch_result
+  name: download_result_archive
   type: http
   seq: 3
 
