@@ -5,12 +5,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+const maxRequestBytes int64 = 1 << 30
 
 type API struct {
 	config Config
@@ -21,10 +28,11 @@ type API struct {
 }
 
 type submitRequest struct {
-	InputPath         string          `json:"inputPath"`
-	OutputPath        string          `json:"outputPath"`
-	Mode              string          `json:"mode"`
-	CreateDestination json.RawMessage `json:"createDestination"`
+	InputPath              string          `json:"inputPath"`
+	OutputPath             string          `json:"outputPath"`
+	Mode                   string          `json:"mode"`
+	CreateDestination      json.RawMessage `json:"createDestination"`
+	CreateDestinationValue bool            `json:"-"`
 }
 
 type acknowledgement struct {
@@ -50,6 +58,7 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.HandleFunc("GET /health", api.health)
 	api.mux.Handle("POST /api/v1/jobs", api.authenticate(http.HandlerFunc(api.submit)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
+	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
 	return api
 }
 
@@ -81,19 +90,68 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) submit(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var request submitRequest
-	if err := decoder.Decode(&request); err != nil {
+	request, archive, err := parseSubmitRequest(w, r)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeProblem(w, http.StatusRequestEntityTooLarge, "Request too large", "REQUEST_TOO_LARGE",
+				"The request body exceeds its size limit.")
+			return
+		}
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
 		return
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
-			"The request body must contain exactly one JSON object.")
-		return
+	var uploadDirectory string
+	var uploadedJobID string
+	if archive != nil {
+		uploadedJobID, err = newJobID()
+		if err != nil {
+			a.logger.Error("could not allocate OCR job ID", "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"The input archive could not be accepted.")
+			return
+		}
+		uploadDirectory, err = createJobWorkspace(a.config.DataRoot, uploadedJobID)
+		if err != nil {
+			a.logger.Error("could not create archive job workspace", "job_id", uploadedJobID, "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"The input archive could not be accepted.")
+			return
+		}
+		defer func() {
+			if uploadDirectory != "" {
+				if err := os.RemoveAll(uploadDirectory); err != nil {
+					a.logger.Warn("could not remove rejected archive upload", "error", err)
+				}
+			}
+		}()
+		input, openErr := archive.Open()
+		if openErr != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
+				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
+			return
+		}
+		inputDirectory := filepath.Join(uploadDirectory, "input")
+		extractErr := extractTarGzip(input, inputDirectory)
+		closeErr := input.Close()
+		if err := errors.Join(extractErr, closeErr); err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
+				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
+			return
+		}
+		relative, err := filepath.Rel(a.config.DataRoot, inputDirectory)
+		if err != nil {
+			a.logger.Error("could not resolve archive upload path", "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"The input archive could not be accepted.")
+			return
+		}
+		request.InputPath = filepath.ToSlash(relative)
+		request.OutputPath = filepath.ToSlash(filepath.Join(".api-host", "jobs", uploadedJobID, "output"))
 	}
 	if strings.TrimSpace(request.InputPath) == "" || strings.TrimSpace(request.OutputPath) == "" ||
 		(request.Mode != "synchronous" && request.Mode != "asynchronous") {
@@ -101,17 +159,8 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The request body is not valid for this operation.")
 		return
 	}
-	createDestination := false
-	if len(request.CreateDestination) != 0 {
-		trimmed := strings.TrimSpace(string(request.CreateDestination))
-		if trimmed == "null" || json.Unmarshal(request.CreateDestination, &createDestination) != nil {
-			writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
-				"The request body is not valid for this operation.")
-			return
-		}
-	}
 	paths, err := ValidatePaths(a.config.DataRoot, a.config.DockerDataRoot,
-		request.InputPath, request.OutputPath, createDestination)
+		request.InputPath, request.OutputPath, request.CreateDestinationValue)
 	if errors.Is(err, ErrPathConflict) {
 		writeProblem(w, http.StatusConflict, "Incompatible directories", "INCOMPATIBLE_PATHS",
 			"Input and destination directories must be distinct and must not contain one another.")
@@ -122,13 +171,19 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The input and destination must satisfy the configured data-root directory rules.")
 		return
 	}
-	job, err := a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	var job Job
+	if uploadedJobID != "" {
+		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	} else {
+		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+	}
 	if err != nil {
 		a.logger.Error("could not persist OCR job", "error", err)
 		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
 			"The job could not be accepted.")
 		return
 	}
+	uploadDirectory = ""
 	a.logger.Info("OCR job accepted", "job_id", job.ID, "mode", request.Mode)
 	if request.Mode == "asynchronous" {
 		w.Header().Set("Location", job.StatusURL)
@@ -136,6 +191,174 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.waitSynchronously(w, r, job.ID)
+}
+
+func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, *multipart.FileHeader, error) {
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil && r.Header.Get("Content-Type") != "" {
+		return submitRequest{}, nil, err
+	}
+	if contentType == "multipart/form-data" {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			return submitRequest{}, nil, err
+		}
+		form := r.MultipartForm
+		for key := range form.Value {
+			switch key {
+			case "inputPath", "outputPath", "mode", "createDestination":
+			default:
+				return submitRequest{}, nil, errors.New("unknown multipart field")
+			}
+			if len(form.Value[key]) != 1 {
+				return submitRequest{}, nil, errors.New("multipart field must appear once")
+			}
+		}
+		for key := range form.File {
+			if key != "inputArchive" || len(form.File[key]) != 1 {
+				return submitRequest{}, nil, errors.New("unknown or repeated multipart file field")
+			}
+		}
+		inputPath, err := multipartTextField(r, "inputPath", false)
+		if err != nil {
+			return submitRequest{}, nil, err
+		}
+		outputPath, err := multipartTextField(r, "outputPath", false)
+		if err != nil {
+			return submitRequest{}, nil, err
+		}
+		mode, err := multipartTextField(r, "mode", true)
+		if err != nil {
+			return submitRequest{}, nil, err
+		}
+		createDestination, err := multipartTextField(r, "createDestination", false)
+		if err != nil {
+			return submitRequest{}, nil, err
+		}
+		create := false
+		if createDestination != "" {
+			switch strings.ToLower(createDestination) {
+			case "true":
+				create = true
+			case "false":
+			default:
+				return submitRequest{}, nil, errors.New("createDestination must be true or false")
+			}
+		}
+		var archive *multipart.FileHeader
+		if files := form.File["inputArchive"]; len(files) == 1 {
+			archive = files[0]
+			if !strings.HasSuffix(strings.ToLower(archive.Filename), ".tar.gz") {
+				return submitRequest{}, nil, errors.New("inputArchive must have a .tar.gz filename")
+			}
+			if inputPath != "" {
+				return submitRequest{}, nil, errors.New("inputPath and inputArchive are mutually exclusive")
+			}
+			if outputPath != "" {
+				return submitRequest{}, nil, errors.New("outputPath is assigned internally for uploaded archives")
+			}
+		}
+		if archive == nil && inputPath == "" {
+			return submitRequest{}, nil, errors.New("inputPath is required without inputArchive")
+		}
+		return submitRequest{
+			InputPath: inputPath, OutputPath: outputPath, Mode: mode,
+			CreateDestinationValue: create,
+		}, archive, nil
+	}
+
+	if contentType != "" && contentType != "application/json" {
+		return submitRequest{}, nil, errors.New("unsupported content type")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request submitRequest
+	if err := decoder.Decode(&request); err != nil {
+		return submitRequest{}, nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return submitRequest{}, nil, errors.New("request must contain exactly one JSON object")
+	}
+	request.CreateDestinationValue = false
+	if len(request.CreateDestination) != 0 {
+		trimmed := strings.TrimSpace(string(request.CreateDestination))
+		if trimmed == "null" || json.Unmarshal(request.CreateDestination, &request.CreateDestinationValue) != nil {
+			return submitRequest{}, nil, errors.New("createDestination must be a boolean")
+		}
+	}
+	return request, nil, nil
+}
+
+func multipartTextField(r *http.Request, key string, required bool) (string, error) {
+	values := r.MultipartForm.Value[key]
+	if len(values) == 0 && !required {
+		return "", nil
+	}
+	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+		return "", errors.New("multipart text field is missing or repeated")
+	}
+	return values[0], nil
+}
+
+func createJobWorkspace(dataRoot, jobID string) (string, error) {
+	root, err := filepath.EvalSymlinks(dataRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve data root: %w", err)
+	}
+	privateRoot := filepath.Join(root, ".api-host")
+	jobsRoot := filepath.Join(privateRoot, "jobs")
+	for _, directory := range []string{privateRoot, jobsRoot} {
+		if err := os.Mkdir(directory, 0o750); err != nil && !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("create private job directory: %w", err)
+		}
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("private job path is not a real directory")
+		}
+	}
+	directory := filepath.Join(jobsRoot, jobID)
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		return "", fmt.Errorf("create job workspace: %w", err)
+	}
+	for _, subdirectory := range []string{"input", "output"} {
+		if err := os.Mkdir(filepath.Join(directory, subdirectory), 0o750); err != nil {
+			cleanupErr := os.RemoveAll(directory)
+			return "", errors.Join(fmt.Errorf("create job %s directory: %w", subdirectory, err), cleanupErr)
+		}
+	}
+	return directory, nil
+}
+
+func isUploadedJob(job Job) bool {
+	jobRoot := filepath.Join(".api-host", "jobs", job.ID)
+	return filepath.Clean(filepath.FromSlash(job.InputPath)) == filepath.Join(jobRoot, "input") &&
+		filepath.Clean(filepath.FromSlash(job.OutputPath)) == filepath.Join(jobRoot, "output")
+}
+
+func removeUploadedJobWorkspace(dataRoot string, job Job) error {
+	if !isUploadedJob(job) {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(dataRoot)
+	if err != nil {
+		return fmt.Errorf("resolve data root: %w", err)
+	}
+	jobsRoot := filepath.Join(root, ".api-host", "jobs")
+	jobDirectory := filepath.Join(jobsRoot, job.ID)
+	if !within(jobsRoot, jobDirectory) || filepath.Base(jobDirectory) != job.ID {
+		return errors.New("job workspace path is invalid")
+	}
+	for _, directory := range []string{filepath.Dir(jobsRoot), jobsRoot} {
+		info, err := os.Lstat(directory)
+		if err != nil {
+			return fmt.Errorf("inspect job workspace parent: %w", err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("job workspace parent is not a real directory")
+		}
+	}
+	return os.RemoveAll(jobDirectory)
 }
 
 func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id string) {
@@ -209,6 +432,103 @@ func (a *API) getJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not read OCR job result", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	if job.Status != "succeeded" {
+		writeProblem(w, http.StatusConflict, "Job result unavailable", "JOB_NOT_COMPLETED",
+			"The processed files are available only after the job succeeds.")
+		return
+	}
+	root, err := filepath.EvalSymlinks(a.config.DataRoot)
+	if err != nil {
+		a.logger.Error("could not resolve data root for job result", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	resultDirectory, err := resolveRelative(root, job.OutputPath)
+	if err == nil {
+		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
+	}
+	if errors.Is(err, os.ErrNotExist) && isUploadedJob(job) {
+		writeProblem(w, http.StatusGone, "Job result already downloaded", "JOB_RESULT_CONSUMED",
+			"The uploaded job workspace was removed after its result was downloaded.")
+		return
+	}
+	if err != nil || !within(root, resultDirectory) {
+		a.logger.Error("job result path is no longer valid", "job_id", id)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	info, err := os.Stat(resultDirectory)
+	if err != nil || !info.IsDir() {
+		a.logger.Error("job result directory is unavailable", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	archive, err := os.CreateTemp("", "big-batch-ocr-result-*.tar.gz")
+	if err != nil {
+		a.logger.Error("could not stage job result archive", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be prepared.")
+		return
+	}
+	archivePath := archive.Name()
+	if err := archive.Close(); err != nil {
+		_ = os.Remove(archivePath)
+		a.logger.Error("could not close staged job result archive", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be prepared.")
+		return
+	}
+	defer os.Remove(archivePath)
+	if err := createTarGzip(resultDirectory, archivePath); err != nil {
+		a.logger.Error("could not create job result archive", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be prepared.")
+		return
+	}
+	file, err := os.Open(archivePath)
+	if err != nil {
+		a.logger.Error("could not open staged job result archive", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	defer file.Close()
+	archiveInfo, err := file.Stat()
+	if err != nil {
+		a.logger.Error("could not inspect staged job result archive", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.tar.gz"`, job.ID))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", archiveInfo.Size()))
+	if _, err := io.Copy(w, file); err != nil {
+		a.logger.Warn("could not send job result archive", "job_id", id, "error", err)
+		return
+	}
+	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
+		a.logger.Error("could not remove downloaded archive job workspace", "job_id", id, "error", err)
+	}
 }
 
 func writeProblem(w http.ResponseWriter, status int, title, code, detail string) {

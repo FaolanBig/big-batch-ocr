@@ -218,6 +218,48 @@ up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns a
 terminal result or a `504` containing the accepted job ID and status URL. The
 job is not cancelled at the wait limit; poll its status URL.
 
+Instead of placing input files on the shared data volume manually, upload a
+`.tar.gz` archive as multipart form data. Set `mode` and optionally
+`createDestination`; do not set `inputPath` or `outputPath`. The API creates a
+private workspace under `.api-host/jobs/<jobId>/` with separate `input` and
+`output` directories:
+
+```sh
+tar -czf /tmp/invoices.tar.gz -C ./invoices .
+response="$(
+  curl --fail-with-body --silent --show-error \
+    -H "Authorization: ******" \
+    -F "inputArchive=@/tmp/invoices.tar.gz" \
+    -F "mode=asynchronous" \
+    http://127.0.0.1:8080/api/v1/jobs
+)"
+printf '%s\n' "$response" | jq .
+job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
+status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
+```
+
+The archive request body is limited to 1 GiB and its extracted contents to
+10 GiB. Archive entries must be files or directories; links and paths that
+escape the archive are rejected. The existing JSON request with `inputPath`
+continues to use the shared-directory workflow and has no uploaded archive.
+
+After a job succeeds, download its processed files by job ID. The endpoint
+returns a `.tar.gz` archive; polling and downloading both require the same
+bearer credential:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: ******" \
+  "http://127.0.0.1:8080/api/v1/jobs/${job_id}/result" \
+  -o "result-${job_id}.tar.gz"
+```
+
+The result is generated from the job's output directory when requested. The
+job-specific workspace, including its extracted input, is removed after the
+download succeeds. A later download attempt for that uploaded job returns
+`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
+JSON request, result downloads do not remove the shared output directory.
+
 ### 6. Monitor and stop the service
 
 Inspect API logs and running containers:

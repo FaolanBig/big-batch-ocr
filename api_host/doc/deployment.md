@@ -154,6 +154,42 @@ explicitly create a missing output path and its parent directories, include
 unreadable input, identical directories, and either directory nested inside
 the other before accepting a job.
 
+To upload the input instead of staging it on the shared volume, send a
+multipart form request with `inputArchive` set to a `.tar.gz` file. Provide
+`mode` and optionally `createDestination`; omit both `inputPath` and
+`outputPath`. The API creates an isolated `.api-host/jobs/<jobId>/` workspace
+with separate `input` and `output` directories:
+
+```sh
+curl --fail-with-body -i \
+  -H "Authorization: ******" \
+  -F "inputArchive=@invoices.tar.gz" \
+  -F "mode=asynchronous" \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+The complete multipart request is limited to 1 GiB and archive extraction to
+10 GiB. The server rejects links and archive paths that escape the extraction
+directory. The JSON request with `inputPath` remains supported for files
+already present under `DATA_ROOT`.
+
+After polling until `status` is `succeeded`, download the output bundle using
+the `jobId` returned by submission:
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: ******" \
+  "http://127.0.0.1:8080/api/v1/jobs/job_ID_FROM_RESPONSE/result" \
+  -o result.tar.gz
+```
+
+The result endpoint returns all files under the job's output directory as a
+`.tar.gz` archive. It returns `409 JOB_NOT_COMPLETED` until the job succeeds.
+After the download succeeds, the uploaded job's private workspace (including
+its extracted input) is deleted; another result request returns
+`410 JOB_RESULT_CONSUMED`. Existing jobs submitted with `inputPath` continue
+using the shared output directory, which is not deleted by downloads.
+
 ### Workato-style HTTP actions
 
 Configure a POST action with the API URL, JSON content type, and a bearer

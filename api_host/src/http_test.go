@@ -1,11 +1,15 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +44,7 @@ func testAPI(t *testing.T, executor testExecutor, wait time.Duration) (*API, *Jo
 	jobs := NewJobService(store, executor, 1, logger)
 	jobs.Start()
 	cfg := Config{
-		APIKey: "test-key", DataRoot: root, DockerDataRoot: "/daemon/data",
+		APIKey: "test-key", DataRoot: root, DockerDataRoot: root,
 		SyncWaitLimit: wait,
 	}
 	api := NewAPI(cfg, jobs, store, logger)
@@ -135,6 +139,149 @@ func TestAsyncJobThenStatusAndSyncSuccess(t *testing.T) {
 	if syncResponse.Code != http.StatusOK {
 		t.Fatalf("sync status = %d, body: %s", syncResponse.Code, syncResponse.Body.String())
 	}
+}
+
+func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if filepath.Base(filepath.Dir(job.InputHost)) != job.ID || filepath.Base(filepath.Dir(job.OutputHost)) != job.ID {
+			return 1, errors.New("uploaded job paths are not isolated by job ID")
+		}
+		input, err := os.ReadFile(filepath.Join(job.InputHost, "invoices", "invoice.pdf"))
+		if err != nil {
+			return 1, err
+		}
+		if string(input) != "source pdf" {
+			return 1, errors.New("unexpected uploaded input")
+		}
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, os.WriteFile(filepath.Join(job.OutputHost, "recognized.txt"), []byte("recognized text"), 0o640)
+	}}, time.Second)
+	defer cleanup()
+	if err := os.WriteFile(filepath.Join(api.config.DataRoot, "output", "previous-job.txt"), []byte("keep me"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	body, contentType := multipartArchiveRequest(t, testArchive(t, "invoices/invoice.pdf", "source pdf"), true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.JobID == "" {
+		t.Fatal("synchronous result did not include a job ID")
+	}
+
+	download := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(download, request)
+	if download.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body: %s", download.Code, download.Body.String())
+	}
+	if got := download.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("download content type = %q", got)
+	}
+	if got := download.Header().Get("Content-Disposition"); !strings.Contains(got, result.JobID+".tar.gz") {
+		t.Fatalf("download disposition = %q", got)
+	}
+	gzipReader, err := gzip.NewReader(bytes.NewReader(download.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarReader := tar.NewReader(gzipReader)
+	header, err := tarReader.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Name != "recognized.txt" {
+		t.Fatalf("downloaded filename = %q", header.Name)
+	}
+	content, err := io.ReadAll(tarReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "recognized text" {
+		t.Fatalf("downloaded file content = %q", content)
+	}
+	jobDirectory := filepath.Join(api.config.DataRoot, ".api-host", "jobs", result.JobID)
+	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded job workspace still exists after download: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(api.config.DataRoot, "output", "previous-job.txt")); err != nil {
+		t.Fatalf("existing shared output was unexpectedly removed: %v", err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	consumed := httptest.NewRecorder()
+	api.ServeHTTP(consumed, request)
+	if consumed.Code != http.StatusGone {
+		t.Fatalf("second result download status = %d, body: %s", consumed.Code, consumed.Body.String())
+	}
+}
+
+func TestMultipartArchiveRejectsTraversal(t *testing.T) {
+	called := false
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		called = true
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	body, contentType := multipartArchiveRequest(t, testArchive(t, "../outside.txt", "unsafe"), true)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"INVALID_ARCHIVE"`) {
+		t.Fatalf("traversal archive response = %d, body: %s", response.Code, response.Body.String())
+	}
+	if called {
+		t.Fatal("unsafe archive started an OCR job")
+	}
+}
+
+func TestJobResultRequiresSuccessfulJob(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	api, _, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		close(started)
+		select {
+		case <-release:
+			return 0, nil
+		case <-ctx.Done():
+			return 1, ctx.Err()
+		}
+	}}, time.Second)
+	defer cleanup()
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	download := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, accepted.StatusURL+"/result", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(download, request)
+	if download.Code != http.StatusConflict || !strings.Contains(download.Body.String(), `"code":"JOB_NOT_COMPLETED"`) {
+		t.Fatalf("incomplete result response = %d, body: %s", download.Code, download.Body.String())
+	}
+	close(release)
 }
 
 func TestSynchronousTimeoutDoesNotCancelJob(t *testing.T) {
@@ -286,6 +433,55 @@ func submitTestJob(api *API, body string) *httptest.ResponseRecorder {
 	request.Header.Set("Authorization", "Bearer test-key")
 	api.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", "synchronous"); err != nil {
+		t.Fatal(err)
+	}
+	if withArchive {
+		part, err := writer.CreateFormFile("inputArchive", "input.tar.gz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(archive); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := writer.WriteField("inputPath", "input"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.WriteField("outputPath", "output"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &body, writer.FormDataContentType()
+}
+
+func testArchive(t *testing.T, filename, content string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: filename, Mode: 0o640, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(tarWriter, content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func mustProblemJobID(t *testing.T, response *httptest.ResponseRecorder) string {

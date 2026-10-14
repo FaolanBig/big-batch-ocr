@@ -31,7 +31,7 @@ extensions:
     openapi:
       - sourceUrl: https://raw.githubusercontent.com/FaolanBig/big-batch-ocr/refs/heads/main/api_host/api/api_specification/main_api_specification_api_host.json
         groupBy: tags
-        lastSyncDate: 2026-10-14T06:56:44.133Z
+        lastSyncDate: 2026-10-14T08:56:40.716Z
         specHash: 4a5aeeca70b47ee5dde6121d2e462f14
         autoCheck: true
         autoCheckInterval: 5

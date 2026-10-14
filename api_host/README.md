@@ -1,6 +1,6 @@
 # Big Batch OCR API Host
 
-This subproject will provide a Dockerized API for Workato and other automation platforms to submit OCR jobs using the existing Big Batch OCR container. The API host will accept input and output directories relative to a configured data root, validate them before starting OCR, and mount the input read-only and the output read-write in the OCR container. Creating a missing output directory must be explicitly requested.
+This subproject will provide a Dockerized API for Workato and other automation platforms to submit OCR jobs using the existing Big Batch OCR container. The API host accepts either an input directory already present under a configured data root or a `.tar.gz` archive attached to a multipart API request. It validates the input and output, mounts the input read-only and output read-write in the OCR container, and supports downloading a successful job's processed files as a `.tar.gz` archive using its job ID. Creating a missing output directory must be explicitly requested.
 
 Each request can choose synchronous execution (wait for the OCR result) or asynchronous execution (return a job ID for status checks). Jobs are queued according to a configurable concurrency limit. Bearer-key authentication is required by default; unauthenticated access is available only when explicitly configured.
 

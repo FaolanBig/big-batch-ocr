@@ -93,8 +93,12 @@ func (s *JobStore) Create(input, output, inputHost, outputHost string) (Job, err
 	if err != nil {
 		return Job{}, err
 	}
+	return s.CreateWithID(id, input, output, inputHost, outputHost)
+}
+
+func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string) (Job, error) {
 	created := time.Now().UTC()
-	_, err = s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at)
+	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at)
 		VALUES(?, 'queued', ?, ?, ?, ?, ?)`,
 		id, input, output, inputHost, outputHost, formatDBTime(created))
 	if err != nil {
@@ -279,6 +283,15 @@ func (s *JobService) Shutdown(ctx context.Context) {
 
 func (s *JobService) Submit(input, output, inputHost, outputHost string) (Job, error) {
 	job, err := s.store.Create(input, output, inputHost, outputHost)
+	if err != nil {
+		return Job{}, err
+	}
+	s.signal()
+	return job, nil
+}
+
+func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost string) (Job, error) {
+	job, err := s.store.CreateWithID(id, input, output, inputHost, outputHost)
 	if err != nil {
 		return Job{}, err
 	}

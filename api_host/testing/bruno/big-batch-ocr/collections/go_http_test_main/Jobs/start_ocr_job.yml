@@ -7,13 +7,17 @@ http:
   method: POST
   url: "{{baseUrl}}/api/v1/jobs"
   body:
-    type: json
-    data: |-
-      {
-        "inputPath": "incoming/sample",
-        "outputPath": "processed/sample",
-        "mode": "asynchronous"
-      }
+    type: multipart-form
+    data:
+      - name: inputPath
+        type: text
+        value: incoming/sample
+      - name: outputPath
+        type: text
+        value: processed/sample
+      - name: mode
+        type: text
+        value: asynchronous
   auth: inherit
 
 runtime:
