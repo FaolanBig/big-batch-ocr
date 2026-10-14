@@ -146,6 +146,21 @@ if (( ${#MISSING_COMMANDS[@]} > 0 )); then
         die "Missing dependencies (${MISSING_COMMANDS[*]}) and installer not found or not executable: $DEPENDENCY_INSTALLER"
     fi
     echo "[INFO] Missing dependencies: ${MISSING_COMMANDS[*]}"
+    if ! exec {TTY_FD}<>/dev/tty 2>/dev/null; then
+        die "Cannot ask for permission to install dependencies without a terminal. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+    fi
+    if ! read -r -p "Run the distro-specific dependency installer now? [y/N] " INSTALL_DEPENDENCIES <&"$TTY_FD"; then
+        exec {TTY_FD}>&-
+        die "Could not read your response. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+    fi
+    exec {TTY_FD}>&-
+    case "$INSTALL_DEPENDENCIES" in
+        [yY]|[yY][eE][sS])
+            ;;
+        *)
+            die "Dependency installation declined. Run '$DEPENDENCY_INSTALLER' manually, then retry."
+            ;;
+    esac
     echo "[INFO] Running the distro-specific dependency installer: $DEPENDENCY_INSTALLER"
     "$DEPENDENCY_INSTALLER" || die "Dependency installation failed."
 
