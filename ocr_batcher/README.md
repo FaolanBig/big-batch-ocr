@@ -8,6 +8,8 @@ Use either the Bash script at `src/ocr_sequencial.sh` or the compiled binary at 
 
 `src/ocr.sh` is deprecated and should no longer be used. Use `ocr_sequencial.sh` or the `ocr_sequencial` binary instead; they provide a more modern and robust workflow, including safe output publishing and resumable PDF processing.
 
+For bare-metal installation of the Bash script's dependencies on Debian or Ubuntu, run [`dependencies/install_dependencies.sh`](dependencies/install_dependencies.sh). See [`dependencies/README.md`](dependencies/README.md) for the package, license, and copyright details.
+
 `ocr_sequencial.sh` recursively processes a source directory and writes results to a target directory, preserving the directory structure. Non-PDF files are copied; PDF files are processed one at a time with OCRmyPDF.
 
 ## Docker
