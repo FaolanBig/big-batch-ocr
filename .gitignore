@@ -1,5 +1,5 @@
 .env
 DEVELOPER_NOTICE.md
 SPONSORING.md
-api_host/*
-ocr_batcher/*
+api_host/**
+ocr_batcher/**
