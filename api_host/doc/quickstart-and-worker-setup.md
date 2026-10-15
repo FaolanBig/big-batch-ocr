@@ -89,6 +89,16 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   /srv/big-batch-ocr-data/processed
 ```
 
+The API host and managed OCR containers run as UID/GID `65532`. If you later
+use `POST /api/v1/jobs/cleanup` with `{"scope":"all"}`, that user must have
+write and execute permission on each shared job directory's parent to remove
+the directory, and on directories inside it to remove their contents. For
+example, owning `incoming/sample` does not let the API delete it if
+`incoming` is owned by root and is not writable by UID/GID `65532`. See
+[`deployment.md`](deployment.md#docker-socket-and-filesystem-mapping) for a
+targeted permission-repair example. Avoid recursively changing permissions on
+the whole data root.
+
 Skip this for archive uploads; they do not require pre-created input or output
 directories.
 Keep `API_KEY` protected; do not commit it or put it into a Docker build

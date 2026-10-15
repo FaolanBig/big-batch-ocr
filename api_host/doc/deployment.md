@@ -67,6 +67,31 @@ containers may still need a one-time ownership/permission repair before API
 cleanup can remove them. Input is bind-mounted read-only at `/source`; output
 is read-write at `/destination`.
 
+For shared-directory jobs, the data-root ownership does not automatically
+apply to existing child directories. The API can remove a shared input/output
+directory during `POST /api/v1/jobs/cleanup` with `{"scope":"all"}` only if
+UID/GID `65532` has write and execute permission on the directory's parent.
+Recursive removal also requires write and execute permission on directories
+inside the tree. Owning the target directory alone is not enough to remove it
+from a root-owned parent. For example, for
+`/srv/big-batch-ocr-data/incoming/sample`, make the parent and job directory
+accessible to the API host:
+
+```sh
+sudo chown 65532:65532 /srv/big-batch-ocr-data/incoming
+sudo chown -R 65532:65532 /srv/big-batch-ocr-data/incoming/sample
+sudo chmod 0750 /srv/big-batch-ocr-data/incoming
+sudo find /srv/big-batch-ocr-data/incoming/sample -type d -exec chmod 0750 {} +
+```
+
+Apply ownership changes only to directories you intend the API host to manage;
+do not recursively change the entire data root just to enable cleanup. If
+other users or services need access, use a shared group and grant the required
+group write/execute permissions instead. Archive-upload workspaces are created
+under `.api-host/jobs` for the API and managed OCR containers; files left
+behind by earlier root-running OCR containers may need a targeted ownership
+repair before `scope:"uploads"` cleanup can remove them.
+
 The named `api-host-state` volume persists the SQLite job database. Back it up
 with the host data. It retains container IDs and the last 32 KiB of captured
 output per job; these diagnostics are internal and are not returned by the
