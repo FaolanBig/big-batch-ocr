@@ -131,6 +131,11 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The request body is not valid for this operation.")
 		return
 	}
+	if archive == nil && !a.config.AllowDirectoryAccess {
+		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
+			"Directory-based submissions are disabled; upload an inputArchive instead.")
+		return
+	}
 	var uploadDirectory string
 	var uploadedJobID string
 	if archive != nil {

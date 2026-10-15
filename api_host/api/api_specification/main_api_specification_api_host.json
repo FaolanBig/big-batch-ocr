@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be selected from a shared directory or uploaded as a tar.gz archive; successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -145,6 +145,16 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Directory-based submissions are disabled by configuration. Upload an inputArchive instead.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "409": {
             "$ref": "#/components/responses/PathConflict"
@@ -659,7 +669,7 @@
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Input directory relative to the configured data root. It must resolve to an existing, readable directory."
+            "description": "Input directory relative to the configured data root. It must resolve to an existing, readable directory and is accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "outputPath": {
             "type": "string",
@@ -683,12 +693,12 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download or cancellation. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true) or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download or cancellation. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive."
+            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive and accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "inputArchive": {
             "type": "string",

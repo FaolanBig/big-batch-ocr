@@ -10,6 +10,7 @@ services:
       API_ADDRESS: ":8080"
       API_KEY: "${API_KEY:-}"
       ALLOW_ANONYMOUS: "${ALLOW_ANONYMOUS:-false}"
+      ALLOW_DIRECTORY_ACCESS: "${ALLOW_DIRECTORY_ACCESS:-false}"
       DATA_ROOT: /data
       DOCKER_DATA_ROOT: "${DOCKER_DATA_ROOT:-/srv/big-batch-ocr-data}"
       DATABASE_PATH: /var/lib/api-host/jobs.db

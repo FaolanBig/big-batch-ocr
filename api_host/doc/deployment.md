@@ -30,6 +30,7 @@ protected `.env` file:
 | --- | --- | --- | --- |
 | `API_KEY` | Yes unless open access is explicitly enabled | — | Bearer token accepted by job endpoints |
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
+| `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | No | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
@@ -109,7 +110,9 @@ Create the runtime environment file with the guided configurator:
 ```
 
 The configurator prompts for an OCR image, API key (or generates one),
-Docker-visible data root, worker settings, and anonymous-access choice. It
+Docker-visible data root, worker settings, anonymous-access choice, and whether
+directory-based submissions are allowed. The latter defaults to `false`, so
+only uploaded archive submissions are accepted unless explicitly enabled. It
 saves the file as `api_host/env/.env` with mode `600`. The data-root directory
 is created by the configurator and made accessible to both the API and OCR
 containers. The configurator detects the socket group ID when available; the

@@ -29,6 +29,43 @@ func TestLoadConfigRequiresKeyUnlessAnonymous(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDirectoryAccessDefaultsDisabledAndCanBeEnabled(t *testing.T) {
+	previous, wasSet := os.LookupEnv("ALLOW_DIRECTORY_ACCESS")
+	if err := os.Unsetenv("ALLOW_DIRECTORY_ACCESS"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv("ALLOW_DIRECTORY_ACCESS", previous)
+		} else {
+			_ = os.Unsetenv("ALLOW_DIRECTORY_ACCESS")
+		}
+	})
+	t.Setenv("API_KEY", "test-key")
+	t.Setenv("ALLOW_ANONYMOUS", "false")
+	t.Setenv("DATA_ROOT", t.TempDir())
+	t.Setenv("DOCKER_DATA_ROOT", "/srv/data")
+	t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "jobs.db"))
+	t.Setenv("OCR_IMAGE", "ghcr.io/faolanbig/big-batch-ocr:v1.2.3")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("load config with directory access unset: %v", err)
+	}
+	if cfg.AllowDirectoryAccess {
+		t.Fatal("directory access should be disabled by default")
+	}
+
+	t.Setenv("ALLOW_DIRECTORY_ACCESS", "true")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatalf("load config with directory access enabled: %v", err)
+	}
+	if !cfg.AllowDirectoryAccess {
+		t.Fatal("directory access should be enabled when explicitly configured")
+	}
+}
+
 func TestLoadConfigRejectsMutableImageAndInvalidConcurrency(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DATA_ROOT", root)

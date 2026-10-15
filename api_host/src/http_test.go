@@ -46,7 +46,7 @@ func testAPI(t *testing.T, executor testExecutor, wait time.Duration) (*API, *Jo
 	jobs.Start()
 	cfg := Config{
 		APIKey: "test-key", DataRoot: root, DockerDataRoot: root,
-		SyncWaitLimit: wait,
+		AllowDirectoryAccess: true, SyncWaitLimit: wait,
 	}
 	api := NewAPI(cfg, jobs, store, logger)
 	cleanup := func() {
@@ -229,6 +229,42 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	api.ServeHTTP(consumed, request)
 	if consumed.Code != http.StatusGone {
 		t.Fatalf("second result download status = %d, body: %s", consumed.Code, consumed.Body.String())
+	}
+}
+
+func TestDirectorySubmissionsCanBeDisabledWithoutDisablingArchiveUploads(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	api.config.AllowDirectoryAccess = false
+
+	directoryResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"synchronous"}`)
+	if directoryResponse.Code != http.StatusForbidden {
+		t.Fatalf("directory submission status = %d, body: %s", directoryResponse.Code, directoryResponse.Body.String())
+	}
+	if !strings.Contains(directoryResponse.Body.String(), `"code":"DIRECTORY_ACCESS_DISABLED"`) {
+		t.Fatalf("directory submission response lacks disable reason: %s", directoryResponse.Body.String())
+	}
+
+	directoryBody, directoryContentType := multipartArchiveRequest(t, nil, false)
+	directoryRequest := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", directoryBody)
+	directoryRequest.Header.Set("Content-Type", directoryContentType)
+	directoryRequest.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	directoryMultipartResponse := httptest.NewRecorder()
+	api.ServeHTTP(directoryMultipartResponse, directoryRequest)
+	if directoryMultipartResponse.Code != http.StatusForbidden {
+		t.Fatalf("multipart directory submission status = %d, body: %s", directoryMultipartResponse.Code, directoryMultipartResponse.Body.String())
+	}
+
+	body, contentType := multipartArchiveRequest(t, testArchive(t, "invoice.pdf", "source pdf"), true)
+	uploadRequest := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	uploadRequest.Header.Set("Content-Type", contentType)
+	uploadRequest.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	uploadResponse := httptest.NewRecorder()
+	api.ServeHTTP(uploadResponse, uploadRequest)
+	if uploadResponse.Code != http.StatusOK {
+		t.Fatalf("archive upload status = %d, body: %s", uploadResponse.Code, uploadResponse.Body.String())
 	}
 }
 
