@@ -16,6 +16,7 @@ sync/async jobs, archive uploads, status polling, and result downloads.
 | High | Better operational health and capacity visibility | `/health` reports liveness only; operators cannot readily distinguish a healthy service from a full queue or unavailable Docker daemon. | Add a protected readiness/status endpoint with queue depth, active workers, and dependency reachability. Keep secrets, paths, and sensitive job details out of the response. |
 | Medium | Per-job OCR options in API | API users currently choose input, output, and execution mode, while OCR settings are configured at deployment. | Allow a narrow, validated allowlist of settings (starting with language and profile) and persist the effective settings with the job for reproducibility. |
 | Medium | Retry failed files or jobs | A per-file failure currently makes a batch exit nonzero, but users must rerun the batch and rely on resume markers to bypass completed work. | Add an explicit retry-failed-only mode based on a prior manifest; distinguish retryable infrastructure errors from invalid or corrupt input. |
+| Medium | Set .env settings via API | | |
 
 ## OCR and batch-processing ideas
 
