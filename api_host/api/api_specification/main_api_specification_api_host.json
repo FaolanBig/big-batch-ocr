@@ -293,6 +293,69 @@
         }
       }
     },
+    "/api/v1/jobs/{jobId}/cancel": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "cancelOcrJob",
+        "summary": "Cancel an OCR job",
+        "description": "Cancels a queued job immediately. For a starting or running job, requests cancellation of its managed OCR container and returns while the container is being stopped. Poll the job status URL until the terminal `cancelled` state is recorded. Cancelling an uploaded-archive job removes its private input and output workspace after the container has stopped.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A queued job was cancelled immediately, or the job was already cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Cancellation was requested for a starting or running job; the managed container is being stopped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job already succeeded or failed and cannot be cancelled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The cancellation request could not be persisted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{jobId}/result": {
       "get": {
         "tags": [
@@ -452,7 +515,7 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download or cancellation. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
@@ -462,7 +525,7 @@
           "inputArchive": {
             "type": "string",
             "format": "binary",
-            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job output directory."
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job output directory that is removed after result download or cancellation."
           },
           "outputPath": {
             "type": "string",
@@ -545,10 +608,12 @@
           "queued",
           "starting",
           "running",
+          "cancelling",
           "succeeded",
-          "failed"
+          "failed",
+          "cancelled"
         ],
-        "description": "`succeeded` indicates successful completion; `failed` indicates execution did not complete successfully."
+        "description": "`succeeded`, `failed`, and `cancelled` are terminal states. `cancelling` means a running job's managed container is being stopped."
       },
       "JobStatus": {
         "type": "object",

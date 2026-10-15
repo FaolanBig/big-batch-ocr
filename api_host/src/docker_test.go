@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/docker/docker/api/types/mount"
@@ -156,5 +158,56 @@ func TestDockerExecutorReturnsImagePullFailure(t *testing.T) {
 	}
 	if createCalled {
 		t.Fatal("container creation proceeded after image pull failure")
+	}
+}
+
+func TestDockerExecutorStopsManagedContainerOnCancellation(t *testing.T) {
+	waitStarted := make(chan struct{})
+	var sawStop, sawRemove atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/images/create"):
+			_, _ = io.WriteString(w, "{}")
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"Id":"container-123","Warnings":[]}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/wait"):
+			close(waitStarted)
+			<-r.Context().Done()
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/container-123/logs"):
+			_, _ = io.WriteString(w, "cancelled OCR log")
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/stop"):
+			sawStop.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/containers/container-123"):
+			sawRemove.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	executor := newTestDockerExecutor(t, server, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer executor.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := executor.Run(ctx, Job{
+			ID: "job_cancel", InputHost: "/daemon/data/in", OutputHost: "/daemon/data/out",
+		}, func(string) error { return nil }, func([]byte) error { return nil })
+		result <- err
+	}()
+	<-waitStarted
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if !sawStop.Load() || !sawRemove.Load() {
+		t.Fatalf("cancel did not stop and remove the managed container: stop=%v remove=%v", sawStop.Load(), sawRemove.Load())
 	}
 }

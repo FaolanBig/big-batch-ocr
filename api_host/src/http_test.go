@@ -231,6 +231,112 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	}
 }
 
+func TestCancelQueuedUploadedJobRemovesWorkspaceImmediately(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var executions int
+	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		executions++
+		if err := markRunning("container-" + job.ID); err != nil {
+			return 1, err
+		}
+		if executions == 1 {
+			close(started)
+			select {
+			case <-release:
+				return 0, nil
+			case <-ctx.Done():
+				return 1, ctx.Err()
+			}
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	first := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first submission status = %d, body: %s", first.Code, first.Body.String())
+	}
+	<-started
+	body, contentType := multipartArchiveRequestWithMode(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	acceptedResponse := httptest.NewRecorder()
+	api.ServeHTTP(acceptedResponse, request)
+	if acceptedResponse.Code != http.StatusAccepted {
+		t.Fatalf("uploaded submission status = %d, body: %s", acceptedResponse.Code, acceptedResponse.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(acceptedResponse.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID)
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("uploaded workspace was not created: %v", err)
+	}
+	cancelResponse := cancelTestJob(api, accepted.JobID)
+	if cancelResponse.Code != http.StatusOK || !strings.Contains(cancelResponse.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("queued cancellation status = %d, body: %s", cancelResponse.Code, cancelResponse.Body.String())
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled upload workspace still exists: err=%v", err)
+	}
+	cancelled, err := store.Get(accepted.JobID)
+	if err != nil || cancelled.Status != "cancelled" || cancelled.CompletedAt == nil {
+		t.Fatalf("queued cancellation was not persisted: job=%#v err=%v", cancelled, err)
+	}
+	if executions != 1 {
+		t.Fatalf("executor ran %d jobs, want only the blocker", executions)
+	}
+	close(release)
+}
+
+func TestCancelRunningUploadedJobStopsWorkAndRemovesWorkspace(t *testing.T) {
+	started := make(chan struct{})
+	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("managed-container"); err != nil {
+			return 1, err
+		}
+		close(started)
+		<-ctx.Done()
+		return 1, ctx.Err()
+	}}, time.Second)
+	defer cleanup()
+	body, contentType := multipartArchiveRequestWithMode(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	acceptedResponse := httptest.NewRecorder()
+	api.ServeHTTP(acceptedResponse, request)
+	if acceptedResponse.Code != http.StatusAccepted {
+		t.Fatalf("uploaded submission status = %d, body: %s", acceptedResponse.Code, acceptedResponse.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(acceptedResponse.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	workspace := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID)
+	response := cancelTestJob(api, accepted.JobID)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"status":"cancelling"`) {
+		t.Fatalf("running cancellation status = %d, body: %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := store.Get(accepted.JobID)
+		_, statErr := os.Stat(workspace)
+		if err == nil && job.Status == "cancelled" && errors.Is(statErr, os.ErrNotExist) {
+			if job.CompletedAt == nil || job.Error == nil || job.Error.Code != "JOB_CANCELLED" {
+				t.Fatalf("cancelled outcome was not fully recorded: %#v", job)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	job, err := store.Get(accepted.JobID)
+	t.Fatalf("running uploaded job did not finish cancellation and cleanup: job=%#v err=%v", job, err)
+}
+
 func TestMultipartArchiveRejectsTraversal(t *testing.T) {
 	called := false
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
@@ -436,10 +542,14 @@ func submitTestJob(api *API, body string) *httptest.ResponseRecorder {
 }
 
 func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*bytes.Buffer, string) {
+	return multipartArchiveRequestWithMode(t, archive, withArchive, "synchronous")
+}
+
+func multipartArchiveRequestWithMode(t *testing.T, archive []byte, withArchive bool, mode string) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("mode", "synchronous"); err != nil {
+	if err := writer.WriteField("mode", mode); err != nil {
 		t.Fatal(err)
 	}
 	if withArchive {
@@ -462,6 +572,14 @@ func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*b
 		t.Fatal(err)
 	}
 	return &body, writer.FormDataContentType()
+}
+
+func cancelTestJob(api *API, id string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+id+"/cancel", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(recorder, request)
+	return recorder
 }
 
 func testArchive(t *testing.T, filename, content string) []byte {
