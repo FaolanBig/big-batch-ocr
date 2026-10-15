@@ -8,5 +8,7 @@ collections:
     path: "collections/go_http_test_main"
 
 specs:
+  - name: "main_api_specification_api_host"
+    path: "//wsl.localhost/Ubuntu-24.04/home/fb/repos/big-batch-ocr/api_host/api/api_specification/main_api_specification_api_host.json"
 
 docs: ''

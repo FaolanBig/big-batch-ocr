@@ -416,7 +416,7 @@
         ],
         "operationId": "cancelOcrJob",
         "summary": "Cancel an OCR job",
-        "description": "Cancels a queued job immediately. For a starting or running job, requests cancellation of its managed OCR container and returns while the container is being stopped. Poll the job status URL until the terminal `cancelled` state is recorded. Cancelling an uploaded-archive job removes its private input and output workspace after the container has stopped.",
+        "description": "Cancels a queued job immediately. For a starting or running job, requests cancellation of its managed OCR container and returns while the container is being stopped. Poll the job status URL until the terminal `cancelled` state is recorded. Cancellation does not delete job data; use the job DELETE or cleanup endpoint to remove it.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -479,7 +479,7 @@
         ],
         "operationId": "downloadOcrJobResult",
         "summary": "Download processed files",
-        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; the job's output directory remains on the configured shared data volume.",
+        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; downloading does not remove job data and results may be downloaded repeatedly. Use the job DELETE or cleanup endpoint to explicitly remove uploaded-job workspaces.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -516,7 +516,7 @@
             "$ref": "#/components/responses/JobNotCompleted"
           },
           "410": {
-            "description": "An uploaded job result was already downloaded and its private workspace has been removed.",
+            "description": "The uploaded job's private workspace is no longer available, for example because it was removed outside the API.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -524,10 +524,10 @@
                 },
                 "example": {
                   "type": "about:blank",
-                  "title": "Job result already downloaded",
+                  "title": "Job result unavailable",
                   "status": 410,
-                  "code": "JOB_RESULT_CONSUMED",
-                  "detail": "The uploaded job workspace was removed after its result was downloaded."
+                  "code": "JOB_RESULT_UNAVAILABLE",
+                  "detail": "The uploaded job workspace is no longer present on the data volume."
                 }
               }
             }
@@ -693,7 +693,7 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true) or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download or cancellation. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true) or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
@@ -703,7 +703,7 @@
           "inputArchive": {
             "type": "string",
             "format": "binary",
-            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job output directory that is removed after result download or cancellation."
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job input/output workspace that remains until explicitly removed with the job DELETE or cleanup endpoint."
           },
           "outputPath": {
             "type": "string",
