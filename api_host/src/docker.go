@@ -58,7 +58,8 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 	response, err := e.client.ContainerCreate(ctx,
 		&container.Config{
 			Image: e.image,
-			Env:   []string{"OCR_JOBS=" + strconv.Itoa(e.jobs)},
+			User:  "65532:65532",
+			Env:   []string{"OCR_JOBS=" + strconv.Itoa(e.jobs), "HOME=/tmp"},
 			Labels: map[string]string{
 				"com.faolanbig.big-batch-ocr.managed": "true",
 				"com.faolanbig.big-batch-ocr.job-id":  job.ID,

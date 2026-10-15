@@ -63,9 +63,11 @@ Do not point it at a path that is available only inside the API container.
 When you use the configurator in step 3, it creates the selected data-root
 directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
 OCR containers. You do not need to create the root manually. To use the
-shared-directory submission method, create the input/output subdirectories
-inside that root and put source files in the input directory. This is not
-needed for archive uploads: the API creates an isolated per-job workspace.
+shared-directory submission method, enable directory-based submissions in the
+configurator, then create the input/output subdirectories inside that root and
+put source files in the input directory. Directory submissions are disabled
+by default; archive uploads need no pre-created input or output directories
+because the API creates an isolated per-job workspace.
 
 ### 3. Configure runtime credentials
 
@@ -76,9 +78,12 @@ Create the runtime environment file with the interactive configurator:
 ```
 
 The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, and worker settings, creates the data-root directory with
-permissions for the containers, then saves `api_host/env/.env` with mode
-`600`. Enter the image and data-root values selected in step 2.
+Docker data root, worker settings, and whether directory-based submissions
+should be allowed. That option defaults to disabled, so use archive uploads
+unless you explicitly opt in to directory submissions. The script creates the
+data-root directory with permissions for the containers, then saves
+`api_host/env/.env` with mode `600`. Enter the image and data-root values
+selected in step 2.
 For the shared-directory example later in this guide, create its child
 directories after configuration (replace the root if you selected a different
 one):
@@ -88,6 +93,16 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   /srv/big-batch-ocr-data/incoming/sample \
   /srv/big-batch-ocr-data/processed
 ```
+
+The API host and managed OCR containers run as UID/GID `65532`. If you later
+use `POST /api/v1/jobs/cleanup` with `{"scope":"all"}`, that user must have
+write and execute permission on each shared job directory's parent to remove
+the directory, and on directories inside it to remove their contents. For
+example, owning `incoming/sample` does not let the API delete it if
+`incoming` is owned by root and is not writable by UID/GID `65532`. See
+[`deployment.md`](deployment.md#docker-socket-and-filesystem-mapping) for a
+targeted permission-repair example. Avoid recursively changing permissions on
+the whole data root.
 
 Skip this for archive uploads; they do not require pre-created input or output
 directories.

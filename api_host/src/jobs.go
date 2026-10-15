@@ -152,6 +152,38 @@ func (s *JobStore) Get(id string) (Job, error) {
 	return job, nil
 }
 
+func (s *JobStore) List() ([]Job, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs ORDER BY queue_order`)
+	if err != nil {
+		return nil, fmt.Errorf("list OCR jobs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read OCR job ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read OCR jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close OCR job list: %w", err)
+	}
+	jobs := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
 func (s *JobStore) ClaimNext() (Job, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -212,6 +244,21 @@ func (s *JobStore) RequestCancel(id string) (Job, error) {
 func (s *JobStore) SetLogs(id string, logs []byte) error {
 	result, err := s.db.Exec(`UPDATE jobs SET container_logs=? WHERE id=?`, string(logs), id)
 	return requireOneRow(result, err, "persist OCR container logs")
+}
+
+func (s *JobStore) DeleteTerminal(id string) error {
+	result, err := s.db.Exec(`DELETE FROM jobs WHERE id=? AND status IN ('succeeded','failed','cancelled')`, id)
+	if err != nil {
+		return fmt.Errorf("delete terminal job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect deleted terminal job: %w", err)
+	}
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *JobStore) Finish(id string, exitCode int, runErr error) error {
@@ -316,19 +363,20 @@ func (s *JobStore) CancelledJobs() ([]Job, error) {
 }
 
 type JobService struct {
-	store    *JobStore
-	executor Executor
-	workers  int
-	logger   *slog.Logger
-	wake     chan struct{}
-	stop     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopOnce sync.Once
-	activeMu sync.Mutex
-	active   map[string]context.CancelFunc
-	onCancel func(Job) error
+	store       *JobStore
+	executor    Executor
+	workers     int
+	logger      *slog.Logger
+	wake        chan struct{}
+	stop        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	stopOnce    sync.Once
+	activeMu    sync.Mutex
+	active      map[string]context.CancelFunc
+	onCancel    func(Job) error
+	maintenance sync.RWMutex
 }
 
 func NewJobService(store *JobStore, executor Executor, workers int, logger *slog.Logger) *JobService {
@@ -365,6 +413,8 @@ func (s *JobService) Shutdown(ctx context.Context) {
 }
 
 func (s *JobService) Submit(input, output, inputHost, outputHost string) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
 	job, err := s.store.Create(input, output, inputHost, outputHost)
 	if err != nil {
 		return Job{}, err
@@ -374,6 +424,8 @@ func (s *JobService) Submit(input, output, inputHost, outputHost string) (Job, e
 }
 
 func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost string) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
 	job, err := s.store.CreateWithID(id, input, output, inputHost, outputHost)
 	if err != nil {
 		return Job{}, err
@@ -383,6 +435,11 @@ func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost strin
 }
 
 func (s *JobService) Get(id string) (Job, error) { return s.store.Get(id) }
+
+func (s *JobService) LockMaintenance() func() {
+	s.maintenance.Lock()
+	return s.maintenance.Unlock
+}
 
 func (s *JobService) SetCancellationCleanup(cleanup func(Job) error) {
 	s.activeMu.Lock()
@@ -426,7 +483,9 @@ func (s *JobService) worker() {
 			return
 		default:
 		}
+		s.maintenance.RLock()
 		job, err := s.store.ClaimNext()
+		s.maintenance.RUnlock()
 		if err == nil {
 			s.execute(job)
 			continue

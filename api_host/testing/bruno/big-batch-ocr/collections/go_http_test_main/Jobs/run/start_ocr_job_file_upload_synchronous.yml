@@ -1,5 +1,5 @@
 info:
-  name: start_ocr_job_file_upload
+  name: start_ocr_job_file_upload_synchronous
   type: http
   seq: 3
 
@@ -16,7 +16,7 @@ http:
         contentType: application/gzip
       - name: mode
         type: text
-        value: asynchronous
+        value: synchronous
   auth: inherit
 
 runtime:

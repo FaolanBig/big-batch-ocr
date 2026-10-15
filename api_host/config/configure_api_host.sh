@@ -118,6 +118,15 @@ while true; do
   esac
 done
 
+while true; do
+  read_value "Allow directory-based job submissions? (otherwise require archive uploads)" "false"
+  case "${REPLY,,}" in
+    true|yes|y) allow_directory_access=true; break ;;
+    false|no|n) allow_directory_access=false; break ;;
+    *) printf 'Answer yes or no.\n' >/dev/tty ;;
+  esac
+done
+
 tmp_file="$(mktemp "$env_dir/.env.XXXXXX")"
 trap 'rm -f -- "$tmp_file"' EXIT
 chmod 600 "$tmp_file"
@@ -125,6 +134,7 @@ chmod 600 "$tmp_file"
   printf 'API_KEY=%s\n' "$api_key"
   printf 'OCR_IMAGE=%s\n' "$ocr_image"
   printf 'ALLOW_ANONYMOUS=%s\n' "$allow_anonymous"
+  printf 'ALLOW_DIRECTORY_ACCESS=%s\n' "$allow_directory_access"
   printf 'DOCKER_GID=%s\n' "$docker_gid"
   printf 'DATA_ROOT=/data\n'
   printf 'DOCKER_DATA_ROOT=%s\n' "$docker_data_root"

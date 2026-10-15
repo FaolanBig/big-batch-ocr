@@ -1,11 +1,17 @@
 info:
-  name: cancel_job
+  name: global_cleanup_all
   type: http
-  seq: 5
+  seq: 3
 
 http:
   method: POST
-  url: "{{baseUrl}}/api/v1/jobs/{{jobId}}/cancel"
+  url: "{{baseUrl}}/api/v1/jobs/cleanup"
+  body:
+    type: json
+    data: |-
+      {
+        "scope": "all"
+      }
   auth: inherit
 
 settings:

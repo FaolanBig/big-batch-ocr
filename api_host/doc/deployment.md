@@ -30,6 +30,7 @@ protected `.env` file:
 | --- | --- | --- | --- |
 | `API_KEY` | Yes unless open access is explicitly enabled | — | Bearer token accepted by job endpoints |
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
+| `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | No | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
@@ -59,9 +60,38 @@ Compose bind mounts that host directory at `/data` inside the API container.
 Keep the two roots aligned as shown so a validated relative path maps to the
 same host files for the OCR container. The configurator creates the selected
 data-root directory with mode `0750` and owner UID/GID `65532`, used by the API
-and OCR containers. If you use the manual `.env` template workflow, create the
-root yourself with the same ownership and permissions. Input is bind-mounted
-read-only at `/source`; output is read-write at `/destination`.
+and managed OCR containers. OCR containers run as UID/GID `65532` so files
+they create can be removed by the non-root API host. If you use the manual
+`.env` template workflow, create the root yourself with the same ownership and
+permissions. Existing output files created by older root-running OCR
+containers may still need a one-time ownership/permission repair before API
+cleanup can remove them. Input is bind-mounted read-only at `/source`; output
+is read-write at `/destination`.
+
+For shared-directory jobs, the data-root ownership does not automatically
+apply to existing child directories. The API can remove a shared input/output
+directory during `POST /api/v1/jobs/cleanup` with `{"scope":"all"}` only if
+UID/GID `65532` has write and execute permission on the directory's parent.
+Recursive removal also requires write and execute permission on directories
+inside the tree. Owning the target directory alone is not enough to remove it
+from a root-owned parent. For example, for
+`/srv/big-batch-ocr-data/incoming/sample`, make the parent and job directory
+accessible to the API host:
+
+```sh
+sudo chown 65532:65532 /srv/big-batch-ocr-data/incoming
+sudo chown -R 65532:65532 /srv/big-batch-ocr-data/incoming/sample
+sudo chmod 0750 /srv/big-batch-ocr-data/incoming
+sudo find /srv/big-batch-ocr-data/incoming/sample -type d -exec chmod 0750 {} +
+```
+
+Apply ownership changes only to directories you intend the API host to manage;
+do not recursively change the entire data root just to enable cleanup. If
+other users or services need access, use a shared group and grant the required
+group write/execute permissions instead. Archive-upload workspaces are created
+under `.api-host/jobs` for the API and managed OCR containers; files left
+behind by earlier root-running OCR containers may need a targeted ownership
+repair before `scope:"uploads"` cleanup can remove them.
 
 The named `api-host-state` volume persists the SQLite job database. Back it up
 with the host data. It retains container IDs and the last 32 KiB of captured
@@ -80,7 +110,9 @@ Create the runtime environment file with the guided configurator:
 ```
 
 The configurator prompts for an OCR image, API key (or generates one),
-Docker-visible data root, worker settings, and anonymous-access choice. It
+Docker-visible data root, worker settings, anonymous-access choice, and whether
+directory-based submissions are allowed. The latter defaults to `false`, so
+only uploaded archive submissions are accepted unless explicitly enabled. It
 saves the file as `api_host/env/.env` with mode `600`. The data-root directory
 is created by the configurator and made accessible to both the API and OCR
 containers. The configurator detects the socket group ID when available; the
