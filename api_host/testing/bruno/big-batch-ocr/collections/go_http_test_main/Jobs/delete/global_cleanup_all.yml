@@ -4,7 +4,7 @@ info:
   seq: 3
 
 http:
-  method: GET
+  method: POST
   url: "{{baseUrl}}/api/v1/jobs/cleanup"
   body:
     type: json
