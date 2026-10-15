@@ -101,7 +101,7 @@ Replace the example tag with a version available in the
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
-TAG=v1.0.0
+TAG=v1.1.0
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
@@ -122,7 +122,7 @@ cd ocr_batcher/docker
 sudo bash build_dockerfile.sh
 ```
 
-Then run the local `ocr_batch_sequencial:1.0.0` image with the same volume
+Then run the local `ocr_batch_sequencial:v1.1.0` image with the same volume
 mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
 
 ### 3. Run the API host

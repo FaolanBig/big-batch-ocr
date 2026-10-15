@@ -53,7 +53,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
-For example, `ghcr.io/faolanbig/big-batch-ocr:v1.0.0`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr:v1.1.0`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
