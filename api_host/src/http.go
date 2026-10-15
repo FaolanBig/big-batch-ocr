@@ -58,6 +58,7 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.HandleFunc("GET /health", api.health)
 	api.mux.Handle("POST /api/v1/jobs", api.authenticate(http.HandlerFunc(api.submit)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
+	api.mux.Handle("DELETE /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.deleteJob)))
 	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
 	jobs.SetCancellationCleanup(func(job Job) error {
@@ -471,6 +472,47 @@ func (a *API) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusConflict, "Job is already terminal", "JOB_NOT_CANCELLABLE",
 			"Only queued or running jobs can be cancelled.")
 	}
+}
+
+func (a *API) deleteJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not read OCR job for deletion", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be deleted.")
+		return
+	}
+	switch job.Status {
+	case "succeeded", "failed", "cancelled":
+	default:
+		writeProblem(w, http.StatusConflict, "Job is not terminal", "JOB_NOT_TERMINAL",
+			"Cancel the job and wait until it reaches a terminal state before deleting it.")
+		return
+	}
+	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
+		a.logger.Error("could not remove uploaded OCR job workspace", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job data could not be deleted.")
+		return
+	}
+	if err := a.store.DeleteTerminal(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+				"No job was found for the supplied identifier.")
+			return
+		}
+		a.logger.Error("could not delete terminal OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be deleted.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {

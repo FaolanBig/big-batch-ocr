@@ -291,6 +291,50 @@
             "$ref": "#/components/responses/JobNotFound"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "deleteOcrJob",
+        "summary": "Delete a terminal OCR job",
+        "description": "Deletes the persisted job record, including its stored container logs and outcome metadata. For jobs submitted with an uploaded archive, also removes the private input/output workspace. Jobs must already be terminal; cancel queued or running jobs first and wait for cancellation to finish. Caller-provided shared input and output directories are never deleted.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The terminal job record and any uploaded-job workspace were deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job is queued, starting, running, or cancelling. Cancel it and wait until it reaches a terminal state before deletion.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The job record or uploaded-job workspace could not be deleted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/jobs/{jobId}/cancel": {

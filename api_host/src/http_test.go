@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -337,6 +338,129 @@ func TestCancelRunningUploadedJobStopsWorkAndRemovesWorkspace(t *testing.T) {
 	t.Fatalf("running uploaded job did not finish cancellation and cleanup: job=%#v err=%v", job, err)
 }
 
+func TestDeleteTerminalUploadedJobRemovesWorkspaceAndMetadata(t *testing.T) {
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, os.WriteFile(filepath.Join(job.OutputHost, "recognized.txt"), []byte("result"), 0o640)
+	}}, time.Second)
+	defer cleanup()
+	body, contentType := multipartArchiveRequestWithMode(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	acceptedResponse := httptest.NewRecorder()
+	api.ServeHTTP(acceptedResponse, request)
+	if acceptedResponse.Code != http.StatusAccepted {
+		t.Fatalf("uploaded submission status = %d, body: %s", acceptedResponse.Code, acceptedResponse.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(acceptedResponse.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := store.Get(accepted.JobID)
+		if err == nil && job.Status == "succeeded" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil || job.Status != "succeeded" {
+		t.Fatalf("uploaded job did not succeed: job=%#v err=%v", job, err)
+	}
+	workspace := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID)
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("uploaded job workspace is missing before deletion: %v", err)
+	}
+	response := deleteTestJob(api, accepted.JobID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body: %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded job workspace remains after deletion: err=%v", err)
+	}
+	if _, err := store.Get(accepted.JobID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("job metadata remains after deletion: err=%v", err)
+	}
+	status := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, accepted.StatusURL, nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(status, request)
+	if status.Code != http.StatusNotFound {
+		t.Fatalf("deleted job status endpoint returned %d, body: %s", status.Code, status.Body.String())
+	}
+}
+
+func TestDeleteActiveJobRequiresCancellationFirst(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("blocker-container"); err != nil {
+			return 1, err
+		}
+		close(started)
+		select {
+		case <-release:
+			return 0, nil
+		case <-ctx.Done():
+			return 1, ctx.Err()
+		}
+	}}, time.Second)
+	defer cleanup()
+	firstResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	if firstResponse.Code != http.StatusAccepted {
+		t.Fatalf("first submission status = %d, body: %s", firstResponse.Code, firstResponse.Body.String())
+	}
+	<-started
+	queuedResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	var queued acknowledgement
+	if err := json.Unmarshal(queuedResponse.Body.Bytes(), &queued); err != nil {
+		t.Fatal(err)
+	}
+	response := deleteTestJob(api, queued.JobID)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"JOB_NOT_TERMINAL"`) {
+		t.Fatalf("active job delete status = %d, body: %s", response.Code, response.Body.String())
+	}
+	if _, err := store.Get(queued.JobID); err != nil {
+		t.Fatalf("active job metadata was removed: %v", err)
+	}
+	close(release)
+}
+
+func TestDeleteSharedDirectoryJobLeavesInputAndOutputDirectories(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, os.WriteFile(filepath.Join(job.OutputHost, "result.txt"), []byte("keep"), 0o640)
+	}}, time.Second)
+	defer cleanup()
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"synchronous"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if deleted := deleteTestJob(api, result.JobID); deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body: %s", deleted.Code, deleted.Body.String())
+	}
+	for _, name := range []string{"input", "output"} {
+		if info, err := os.Stat(filepath.Join(api.config.DataRoot, name)); err != nil || !info.IsDir() {
+			t.Fatalf("shared %s directory was removed: info=%v err=%v", name, info, err)
+		}
+	}
+	if content, err := os.ReadFile(filepath.Join(api.config.DataRoot, "output", "result.txt")); err != nil || string(content) != "keep" {
+		t.Fatalf("shared output data was removed: content=%q err=%v", content, err)
+	}
+}
+
 func TestMultipartArchiveRejectsTraversal(t *testing.T) {
 	called := false
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
@@ -577,6 +701,14 @@ func multipartArchiveRequestWithMode(t *testing.T, archive []byte, withArchive b
 func cancelTestJob(api *API, id string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+id+"/cancel", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func deleteTestJob(api *API, id string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/"+id, nil)
 	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	api.ServeHTTP(recorder, request)
 	return recorder

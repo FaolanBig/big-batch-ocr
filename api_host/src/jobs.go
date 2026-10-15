@@ -214,6 +214,21 @@ func (s *JobStore) SetLogs(id string, logs []byte) error {
 	return requireOneRow(result, err, "persist OCR container logs")
 }
 
+func (s *JobStore) DeleteTerminal(id string) error {
+	result, err := s.db.Exec(`DELETE FROM jobs WHERE id=? AND status IN ('succeeded','failed','cancelled')`, id)
+	if err != nil {
+		return fmt.Errorf("delete terminal job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect deleted terminal job: %w", err)
+	}
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *JobStore) Finish(id string, exitCode int, runErr error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
