@@ -285,11 +285,15 @@ curl --fail-with-body --silent --show-error \
   -o "result-${job_id}.tar.gz"
 ```
 
-The result is generated from the job's output directory when requested. The
-job-specific workspace, including its extracted input, is removed after the
-download succeeds. A later download attempt for that uploaded job returns
-`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
-JSON request, result downloads do not remove the shared output directory.
+The result is generated from the job's output directory when requested.
+Downloading does not remove the job-specific workspace or its extracted
+input; the result can be downloaded again later. Remove uploaded-job data
+explicitly with `DELETE /api/v1/jobs/${job_id}` after the job is terminal, or
+use `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to delete all
+terminal uploaded jobs. Cancelling a job also preserves its workspace until
+explicit cleanup. For jobs submitted with the original `inputPath` JSON
+request, result downloads do not remove the shared output directory, and
+deleting the job record does not remove shared input/output directories.
 
 ### 6. Monitor and stop the service
 
