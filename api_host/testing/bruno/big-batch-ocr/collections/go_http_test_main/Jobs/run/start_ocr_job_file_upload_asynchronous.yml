@@ -12,7 +12,7 @@ http:
       - name: inputArchive
         type: file
         value:
-          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\compr_book.tar.gz
+          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\Vertrag01.tar.gz
         contentType: application/gzip
       - name: mode
         type: text
