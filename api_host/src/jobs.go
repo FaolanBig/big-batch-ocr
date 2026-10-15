@@ -187,31 +187,78 @@ func (s *JobStore) SetRunning(id, containerID string) error {
 	return requireOneRow(result, err, "mark job running")
 }
 
+func (s *JobStore) RequestCancel(id string) (Job, error) {
+	now := formatDBTime(time.Now().UTC())
+	result, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled by request.'
+		WHERE id=? AND status='queued'`, now, id)
+	if err != nil {
+		return Job{}, fmt.Errorf("cancel queued job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Job{}, err
+	}
+	if changed == 0 {
+		_, err = s.db.Exec(`UPDATE jobs SET status='cancelling'
+			WHERE id=? AND status IN ('starting','running')`, id)
+		if err != nil {
+			return Job{}, fmt.Errorf("request running job cancellation: %w", err)
+		}
+	}
+	return s.Get(id)
+}
+
 func (s *JobStore) SetLogs(id string, logs []byte) error {
 	result, err := s.db.Exec(`UPDATE jobs SET container_logs=? WHERE id=?`, string(logs), id)
 	return requireOneRow(result, err, "persist OCR container logs")
 }
 
 func (s *JobStore) Finish(id string, exitCode int, runErr error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin job completion: %w", err)
+	}
+	defer tx.Rollback()
 	now := formatDBTime(time.Now().UTC())
+	result, err := tx.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled by request.'
+		WHERE id=? AND status='cancelling'`, now, id)
+	if err != nil {
+		return fmt.Errorf("persist cancelled job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 1 {
+		return tx.Commit()
+	}
 	if runErr != nil {
-		result, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=NULL,
-			error_code='OCR_EXECUTION_FAILED',error_message=? WHERE id=?`,
+		result, err = tx.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=NULL,
+			error_code='OCR_EXECUTION_FAILED',error_message=? WHERE id=? AND status IN ('starting','running')`,
 			now, "The OCR container could not be started or monitored.", id)
-		return requireOneRow(result, err, "persist failed job")
+	} else if exitCode == 0 {
+		result, err = tx.Exec(`UPDATE jobs SET status='succeeded',completed_at=?,exit_code=0
+			WHERE id=? AND status IN ('starting','running')`, now, id)
+	} else {
+		message := "The OCR container exited unsuccessfully."
+		result, err = tx.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=?,error_code='OCR_EXECUTION_FAILED',
+			error_message=? WHERE id=? AND status IN ('starting','running')`, now, exitCode, message, id)
 	}
-	if exitCode == 0 {
-		result, err := s.db.Exec(`UPDATE jobs SET status='succeeded',completed_at=?,exit_code=0 WHERE id=?`, now, id)
-		return requireOneRow(result, err, "persist succeeded job")
+	if err := requireOneRow(result, err, "persist job outcome"); err != nil {
+		return err
 	}
-	message := "The OCR container exited unsuccessfully."
-	result, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=?,error_code='OCR_EXECUTION_FAILED',
-		error_message=? WHERE id=?`, now, exitCode, message, id)
-	return requireOneRow(result, err, "persist failed job")
+	return tx.Commit()
 }
 
 func (s *JobStore) RecoverInterrupted() error {
 	now := formatDBTime(time.Now().UTC())
+	if _, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled before the API host restarted.',container_id=NULL
+		WHERE status='cancelling'`, now); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,error_code='OCR_EXECUTION_FAILED',
 		error_message='The API host restarted before completion could be confirmed.',container_id=NULL
 		WHERE status IN ('starting','running')`, now)
@@ -220,7 +267,7 @@ func (s *JobStore) RecoverInterrupted() error {
 
 func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
 	rows, err := s.db.Query(`SELECT container_id FROM jobs
-		WHERE status IN ('starting','running') AND container_id IS NOT NULL`)
+		WHERE status IN ('starting','running','cancelling') AND container_id IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -236,6 +283,38 @@ func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
 	return ids, rows.Err()
 }
 
+func (s *JobStore) CancelledJobs() ([]Job, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs WHERE status='cancelled' ORDER BY queue_order`)
+	if err != nil {
+		return nil, fmt.Errorf("list cancelled jobs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read cancelled job ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read cancelled jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close cancelled jobs: %w", err)
+	}
+	jobs := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
 type JobService struct {
 	store    *JobStore
 	executor Executor
@@ -247,6 +326,9 @@ type JobService struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
+	activeMu sync.Mutex
+	active   map[string]context.CancelFunc
+	onCancel func(Job) error
 }
 
 func NewJobService(store *JobStore, executor Executor, workers int, logger *slog.Logger) *JobService {
@@ -254,6 +336,7 @@ func NewJobService(store *JobStore, executor Executor, workers int, logger *slog
 	return &JobService{
 		store: store, executor: executor, workers: workers, logger: logger,
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), ctx: ctx, cancel: cancel,
+		active: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -301,6 +384,31 @@ func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost strin
 
 func (s *JobService) Get(id string) (Job, error) { return s.store.Get(id) }
 
+func (s *JobService) SetCancellationCleanup(cleanup func(Job) error) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	s.onCancel = cleanup
+}
+
+func (s *JobService) Cancel(id string) (Job, error) {
+	job, err := s.store.RequestCancel(id)
+	if err != nil {
+		return Job{}, err
+	}
+	switch job.Status {
+	case "cancelled":
+		s.cleanupCancelled(job)
+	case "cancelling":
+		s.activeMu.Lock()
+		cancel := s.active[id]
+		s.activeMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	return job, nil
+}
+
 func (s *JobService) signal() {
 	select {
 	case s.wake <- struct{}{}:
@@ -339,11 +447,40 @@ func (s *JobService) worker() {
 }
 
 func (s *JobService) execute(job Job) {
-	exitCode, runErr := s.executor.Run(s.ctx, job,
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.activeMu.Lock()
+	s.active[job.ID] = cancel
+	s.activeMu.Unlock()
+	defer func() {
+		s.activeMu.Lock()
+		delete(s.active, job.ID)
+		s.activeMu.Unlock()
+		cancel()
+	}()
+	current, err := s.store.Get(job.ID)
+	if err != nil {
+		s.logger.Error("unable to read OCR job before execution", "job_id", job.ID, "error", err)
+		return
+	}
+	if current.Status == "cancelling" {
+		cancel()
+	}
+	exitCode, runErr := s.executor.Run(ctx, job,
 		func(containerID string) error { return s.store.SetRunning(job.ID, containerID) },
 		func(logs []byte) error { return s.store.SetLogs(job.ID, logs) })
 	if err := s.store.Finish(job.ID, exitCode, runErr); err != nil {
 		s.logger.Error("unable to persist OCR job outcome", "job_id", job.ID, "error", err)
+		return
+	}
+	finished, err := s.store.Get(job.ID)
+	if err != nil {
+		s.logger.Error("unable to read final OCR job outcome", "job_id", job.ID, "error", err)
+		return
+	}
+	if finished.Status == "cancelled" {
+		s.cleanupCancelled(finished)
+		s.logger.Info("OCR job cancelled", "job_id", job.ID)
+		return
 	}
 	if runErr != nil {
 		s.logger.Warn("OCR job execution failed", "job_id", job.ID, "failure", "executor_error")
@@ -354,6 +491,17 @@ func (s *JobService) execute(job Job) {
 		return
 	}
 	s.logger.Info("OCR job completed", "job_id", job.ID, "status", "succeeded")
+}
+
+func (s *JobService) cleanupCancelled(job Job) {
+	s.activeMu.Lock()
+	cleanup := s.onCancel
+	s.activeMu.Unlock()
+	if cleanup != nil {
+		if err := cleanup(job); err != nil {
+			s.logger.Error("could not clean up cancelled OCR job", "job_id", job.ID, "error", err)
+		}
+	}
 }
 
 func requireOneRow(result sql.Result, err error, operation string) error {

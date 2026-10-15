@@ -58,7 +58,14 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.HandleFunc("GET /health", api.health)
 	api.mux.Handle("POST /api/v1/jobs", api.authenticate(http.HandlerFunc(api.submit)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
+	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
+	jobs.SetCancellationCleanup(func(job Job) error {
+		if err := removeUploadedJobWorkspace(config.DataRoot, job); err != nil {
+			return fmt.Errorf("remove cancelled upload workspace: %w", err)
+		}
+		return nil
+	})
 	return api
 }
 
@@ -390,6 +397,13 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 				JobID: job.ID, JobStatus: job.Status, StatusURL: job.StatusURL,
 			}, "application/problem+json")
 			return
+		case "cancelled":
+			writeJSONContentType(w, http.StatusConflict, problem{
+				Type: "about:blank", Title: "OCR job cancelled", Status: http.StatusConflict,
+				Code: "JOB_CANCELLED", Detail: "The OCR job was cancelled.",
+				JobID: job.ID, JobStatus: job.Status, StatusURL: job.StatusURL,
+			}, "application/problem+json")
+			return
 		}
 		select {
 		case <-r.Context().Done():
@@ -402,7 +416,7 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 					"The job status could not be read.")
 				return
 			}
-			if job.Status == "succeeded" || job.Status == "failed" {
+			if job.Status == "succeeded" || job.Status == "failed" || job.Status == "cancelled" {
 				continue
 			}
 			writeJSONContentType(w, http.StatusGatewayTimeout, problem{
@@ -432,6 +446,31 @@ func (a *API) getJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *API) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Cancel(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not cancel OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be cancelled.")
+		return
+	}
+	switch job.Status {
+	case "cancelled":
+		writeJSON(w, http.StatusOK, job)
+	case "cancelling":
+		writeJSON(w, http.StatusAccepted, job)
+	default:
+		writeProblem(w, http.StatusConflict, "Job is already terminal", "JOB_NOT_CANCELLABLE",
+			"Only queued or running jobs can be cancelled.")
+	}
 }
 
 func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {

@@ -17,7 +17,7 @@ config:
 request:
   auth:
     type: bearer
-    token: b9e8ca994bb2996272d961cee774a3a117d92bb71a1d88ac35a4f63da39a8c32
+    token: "{{api_key}}"
 bundled: false
 extensions:
   bruno:

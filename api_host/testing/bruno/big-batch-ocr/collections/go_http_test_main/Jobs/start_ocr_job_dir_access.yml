@@ -1,5 +1,5 @@
 info:
-  name: start_ocr_job
+  name: start_ocr_job_dir_access
   type: http
   seq: 2
 
