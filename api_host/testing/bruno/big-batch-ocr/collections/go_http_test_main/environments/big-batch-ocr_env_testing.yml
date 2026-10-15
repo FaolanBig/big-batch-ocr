@@ -3,7 +3,7 @@ variables:
   - name: baseUrl
     value: http://localhost:8080
     description: base URL
-  - name: jobId
-    value: job_b87ceeb2a2e87ba67003
   - secret: true
     name: api_key
+  - name: jobId
+    value: job_75d011cb8ea990cf60b4
