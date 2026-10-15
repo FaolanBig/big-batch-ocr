@@ -461,6 +461,136 @@ func TestDeleteSharedDirectoryJobLeavesInputAndOutputDirectories(t *testing.T) {
 	}
 }
 
+func TestBulkCleanupUploadsRemovesOnlyTerminalUploadedJobs(t *testing.T) {
+	api, store, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	workspace, err := createJobWorkspace(api.config.DataRoot, "job_uploaded_cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.CreateWithID(
+		"job_uploaded_cleanup",
+		".api-host/jobs/job_uploaded_cleanup/input",
+		".api-host/jobs/job_uploaded_cleanup/output",
+		filepath.Join(workspace, "input"),
+		filepath.Join(workspace, "output"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=? WHERE id=?`,
+		formatDBTime(time.Now().UTC()), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(api.config.DataRoot, "output", "keep.txt"), []byte("keep"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	response := cleanupJobsTestRequest(api, `{"scope":"uploads"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cleanup status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var result cleanupResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Scope != "uploads" || result.JobsDeleted != 1 {
+		t.Fatalf("unexpected cleanup result: %#v", result)
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded workspace still exists: %v", err)
+	}
+	if _, err := store.Get(job.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("uploaded job metadata remains: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(api.config.DataRoot, "output", "keep.txt")); err != nil || string(content) != "keep" {
+		t.Fatalf("uploads cleanup touched shared output: content=%q err=%v", content, err)
+	}
+}
+
+func TestBulkCleanupAllIgnoresActiveAndProtectsSharedPaths(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var runs int
+	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		runs++
+		if err := markRunning("active-container"); err != nil {
+			return 1, err
+		}
+		if runs > 1 {
+			return 0, nil
+		}
+		close(started)
+		select {
+		case <-release:
+			return 0, nil
+		case <-ctx.Done():
+			return 1, ctx.Err()
+		}
+	}}, time.Second)
+	defer cleanup()
+	activeResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	if activeResponse.Code != http.StatusAccepted {
+		t.Fatalf("active submission status = %d, body: %s", activeResponse.Code, activeResponse.Body.String())
+	}
+	<-started
+	queuedResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	var queued acknowledgement
+	if err := json.Unmarshal(queuedResponse.Body.Bytes(), &queued); err != nil {
+		t.Fatal(err)
+	}
+	finishedInput := filepath.Join(api.config.DataRoot, "finished-input")
+	finishedOutput := filepath.Join(api.config.DataRoot, "finished-output")
+	for _, directory := range []string{finishedInput, finishedOutput} {
+		if err := os.Mkdir(directory, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "marker.txt"), []byte("remove"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertJob := func(id, status, input, output string) {
+		t.Helper()
+		_, err := store.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,completed_at)
+			VALUES(?,?,?,?,?,?,?,?)`,
+			id, status, input, output, filepath.Join(api.config.DataRoot, input),
+			filepath.Join(api.config.DataRoot, output), formatDBTime(time.Now().UTC()), formatDBTime(time.Now().UTC()))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertJob("job_finished_cleanup", "succeeded", "finished-input", "finished-output")
+	insertJob("job_overlaps_active", "failed", "input", "output")
+	response := cleanupJobsTestRequest(api, `{"scope":"all"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cleanup status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var result cleanupResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.JobsDeleted != 1 || result.ActiveJobsSkipped != 2 || result.JobsSkippedForActiveData != 1 {
+		t.Fatalf("unexpected cleanup result: %#v", result)
+	}
+	for _, directory := range []string{finishedInput, finishedOutput} {
+		if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("terminal job directory still exists: %s err=%v", directory, err)
+		}
+	}
+	for _, id := range []string{queued.JobID, "job_overlaps_active"} {
+		if _, err := store.Get(id); err != nil {
+			t.Fatalf("ignored job %s metadata was removed: %v", id, err)
+		}
+	}
+	for _, path := range []string{"input", "output"} {
+		if info, err := os.Stat(filepath.Join(api.config.DataRoot, path)); err != nil || !info.IsDir() {
+			t.Fatalf("active job directory %s was removed: info=%v err=%v", path, info, err)
+		}
+	}
+	close(release)
+}
+
 func TestMultipartArchiveRejectsTraversal(t *testing.T) {
 	called := false
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
@@ -710,6 +840,15 @@ func deleteTestJob(api *API, id string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/"+id, nil)
 	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func cleanupJobsTestRequest(api *API, body string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/cleanup", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	request.Header.Set("Content-Type", "application/json")
 	api.ServeHTTP(recorder, request)
 	return recorder
 }

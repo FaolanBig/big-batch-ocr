@@ -195,6 +195,68 @@
         }
       }
     },
+    "/api/v1/jobs/cleanup": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "cleanupOcrJobData",
+        "summary": "Clean up terminal job data",
+        "description": "Cleans up only succeeded, failed, or cancelled jobs. Active jobs are ignored and reported in `activeJobsSkipped`. Scope `uploads` deletes metadata and private workspaces for jobs submitted with uploaded archives. Scope `all` also deletes each terminal shared-directory job's whole input and output directories, except paths shared with active jobs or containing API host database files. Shared-directory cleanup is destructive and permanent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupJobDataRequest"
+              },
+              "examples": {
+                "uploads": {
+                  "summary": "Remove uploaded-archive job data only",
+                  "value": {
+                    "scope": "uploads"
+                  }
+                },
+                "all": {
+                  "summary": "Remove all terminal job data, including shared directories",
+                  "value": {
+                    "scope": "all"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cleanup completed. Active jobs and terminal jobs whose paths are needed by active jobs are ignored, not treated as errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupJobDataResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "description": "A data path could not be safely resolved or removed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{jobId}": {
       "get": {
         "tags": [
@@ -523,6 +585,62 @@
       }
     },
     "schemas": {
+      "CleanupJobDataRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "uploads",
+              "all"
+            ],
+            "description": "`uploads` removes uploaded-archive workspaces and metadata only. `all` also removes whole shared input/output directories for terminal jobs."
+          }
+        }
+      },
+      "CleanupJobDataResult": {
+        "type": "object",
+        "required": [
+          "scope",
+          "jobsDeleted",
+          "activeJobsSkipped",
+          "jobsSkippedForActiveData",
+          "jobsSkippedForServerData"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "uploads",
+              "all"
+            ]
+          },
+          "jobsDeleted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal job records deleted."
+          },
+          "activeJobsSkipped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of queued, starting, running, or cancelling jobs left untouched."
+          },
+          "jobsSkippedForActiveData": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal jobs whose shared directories overlap paths referenced by active jobs."
+          },
+          "jobsSkippedForServerData": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal jobs skipped because their directory contains the API host database."
+          }
+        }
+      },
       "SubmitJobRequest": {
         "type": "object",
         "additionalProperties": false,
