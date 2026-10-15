@@ -4,7 +4,7 @@ info:
   seq: 5
 
 http:
-  method: GET
+  method: POST
   url: "{{baseUrl}}/api/v1/jobs/{{jobId}}/cancel"
   auth: inherit
 
