@@ -185,8 +185,8 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The request body is not valid for this operation.")
 		return
 	}
-	paths, err := ValidatePaths(a.config.DataRoot, a.config.DockerDataRoot,
-		request.InputPath, request.OutputPath, request.CreateDestinationValue)
+	paths, err := validatePaths(a.config.DataRoot, a.config.DockerDataRoot,
+		request.InputPath, request.OutputPath, request.CreateDestinationValue, uploadedJobID != "")
 	if errors.Is(err, ErrPathConflict) {
 		writeProblem(w, http.StatusConflict, "Incompatible directories", "INCOMPATIBLE_PATHS",
 			"Input and destination directories must be distinct and must not contain one another.")
@@ -395,7 +395,7 @@ func resolveJobDirectory(dataRoot, requestPath string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("resolve data root: %w", err)
 	}
-	relative, err := safeRelativePath(root, requestPath)
+	relative, err := safeRelativePath(root, requestPath, false)
 	if err != nil {
 		return "", false, err
 	}
@@ -755,7 +755,7 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The job result could not be read.")
 		return
 	}
-	resultDirectory, err := resolveRelative(root, job.OutputPath)
+	resultDirectory, err := resolveRelative(root, job.OutputPath, isUploadedJob(job))
 	if err == nil {
 		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
 	}

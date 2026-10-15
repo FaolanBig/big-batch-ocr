@@ -44,6 +44,35 @@ func TestValidatePathsRejectsTraversalAndSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestValidatePathsRejectsPrivateAPIHostDirectory(t *testing.T) {
+	root := t.TempDir()
+	for _, directory := range []string{"input", ".api-host", ".api-host/jobs"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(root, ".api-host"), filepath.Join(root, "private-alias")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []string{".api-host", ".api-host/jobs", "private-alias"} {
+		if _, err := ValidatePaths(root, "/daemon/data", input, "destination", false); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("private input %q error = %v, want ErrInvalidPath", input, err)
+		}
+	}
+	for _, output := range []string{".api-host", ".api-host/jobs", "private-alias"} {
+		if _, err := ValidatePaths(root, "/daemon/data", "input", output, false); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("private output %q error = %v, want ErrInvalidPath", output, err)
+		}
+	}
+	if _, err := ValidatePaths(root, "/daemon/data", "input", ".api-host/new/output", true); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("private destination creation error = %v, want ErrInvalidPath", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".api-host", "new")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("rejected private destination was created: %v", err)
+	}
+}
+
 func TestValidatePathsRejectsSameAndNestedDirectories(t *testing.T) {
 	root := t.TempDir()
 	output := filepath.Join(root, "in", "out")

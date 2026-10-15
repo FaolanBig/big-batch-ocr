@@ -94,7 +94,9 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 	}
 	waitCh, errCh := e.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
 	cancelContainer := func() error {
-		e.captureLogs(context.Background(), job.ID, containerID, saveLogs)
+		logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		e.captureLogs(logCtx, job.ID, containerID, saveLogs)
+		cancel()
 		if err := e.stopAndRemove(containerID); err != nil {
 			e.logger.Warn("could not stop cancelled OCR container", "job_id", job.ID, "error_type", fmt.Sprintf("%T", err))
 			return errors.Join(ctx.Err(), err)
