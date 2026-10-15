@@ -30,6 +30,7 @@ protected `.env` file:
 | --- | --- | --- | --- |
 | `API_KEY` | Yes unless open access is explicitly enabled | — | Bearer token accepted by job endpoints |
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
+| `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | No | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
@@ -109,7 +110,9 @@ Create the runtime environment file with the guided configurator:
 ```
 
 The configurator prompts for an OCR image, API key (or generates one),
-Docker-visible data root, worker settings, and anonymous-access choice. It
+Docker-visible data root, worker settings, anonymous-access choice, and whether
+directory-based submissions are allowed. The latter defaults to `false`, so
+only uploaded archive submissions are accepted unless explicitly enabled. It
 saves the file as `api_host/env/.env` with mode `600`. The data-root directory
 is created by the configurator and made accessible to both the API and OCR
 containers. The configurator detects the socket group ID when available; the
@@ -217,10 +220,23 @@ curl --fail-with-body \
 
 The result endpoint returns all files under the job's output directory as a
 `.tar.gz` archive. It returns `409 JOB_NOT_COMPLETED` until the job succeeds.
-After the download succeeds, the uploaded job's private workspace (including
-its extracted input) is deleted; another result request returns
-`410 JOB_RESULT_CONSUMED`. Existing jobs submitted with `inputPath` continue
-using the shared output directory, which is not deleted by downloads.
+Downloading does not delete job data: uploaded-job workspaces (including the
+extracted input) remain available, and results can be downloaded repeatedly.
+To delete an uploaded job's workspace and metadata, explicitly call the
+terminal-job DELETE endpoint:
+
+```sh
+curl --fail-with-body -X DELETE \
+  -H "Authorization: ******" \
+  "http://127.0.0.1:8080/api/v1/jobs/job_ID_FROM_RESPONSE"
+```
+
+Alternatively, call `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to
+delete all terminal uploaded jobs and their workspaces. Cancelling an uploaded
+job also preserves its workspace until one of these cleanup API calls is made.
+Existing jobs submitted with `inputPath` continue using the shared output
+directory; deleting their job record does not remove those caller-managed
+directories.
 
 ### Workato-style HTTP actions
 

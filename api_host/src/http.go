@@ -77,12 +77,6 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.Handle("DELETE /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.deleteJob)))
 	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
-	jobs.SetCancellationCleanup(func(job Job) error {
-		if err := removeUploadedJobWorkspace(config.DataRoot, job); err != nil {
-			return fmt.Errorf("remove cancelled upload workspace: %w", err)
-		}
-		return nil
-	})
 	return api
 }
 
@@ -129,6 +123,11 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
+		return
+	}
+	if archive == nil && !a.config.AllowDirectoryAccess {
+		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
+			"Directory-based submissions are disabled; upload an inputArchive instead.")
 		return
 	}
 	var uploadDirectory string
@@ -760,8 +759,8 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
 	}
 	if errors.Is(err, os.ErrNotExist) && isUploadedJob(job) {
-		writeProblem(w, http.StatusGone, "Job result already downloaded", "JOB_RESULT_CONSUMED",
-			"The uploaded job workspace was removed after its result was downloaded.")
+		writeProblem(w, http.StatusGone, "Job result unavailable", "JOB_RESULT_UNAVAILABLE",
+			"The uploaded job workspace is no longer present on the data volume.")
 		return
 	}
 	if err != nil || !within(root, resultDirectory) {
@@ -819,10 +818,6 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", archiveInfo.Size()))
 	if _, err := io.Copy(w, file); err != nil {
 		a.logger.Warn("could not send job result archive", "job_id", id, "error", err)
-		return
-	}
-	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
-		a.logger.Error("could not remove downloaded archive job workspace", "job_id", id, "error", err)
 	}
 }
 

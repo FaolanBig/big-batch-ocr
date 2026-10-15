@@ -46,7 +46,7 @@ func testAPI(t *testing.T, executor testExecutor, wait time.Duration) (*API, *Jo
 	jobs.Start()
 	cfg := Config{
 		APIKey: "test-key", DataRoot: root, DockerDataRoot: root,
-		SyncWaitLimit: wait,
+		AllowDirectoryAccess: true, SyncWaitLimit: wait,
 	}
 	api := NewAPI(cfg, jobs, store, logger)
 	cleanup := func() {
@@ -216,8 +216,8 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 		t.Fatalf("downloaded file content = %q", content)
 	}
 	jobDirectory := filepath.Join(api.config.DataRoot, ".api-host", "jobs", result.JobID)
-	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("uploaded job workspace still exists after download: err=%v", err)
+	if _, err := os.Stat(jobDirectory); err != nil {
+		t.Fatalf("uploaded job workspace was removed by download: err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(api.config.DataRoot, "output", "previous-job.txt")); err != nil {
 		t.Fatalf("existing shared output was unexpectedly removed: %v", err)
@@ -225,14 +225,56 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
 	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
-	consumed := httptest.NewRecorder()
-	api.ServeHTTP(consumed, request)
-	if consumed.Code != http.StatusGone {
-		t.Fatalf("second result download status = %d, body: %s", consumed.Code, consumed.Body.String())
+	repeatedDownload := httptest.NewRecorder()
+	api.ServeHTTP(repeatedDownload, request)
+	if repeatedDownload.Code != http.StatusOK {
+		t.Fatalf("repeated download status = %d, body: %s", repeatedDownload.Code, repeatedDownload.Body.String())
+	}
+	if deleted := deleteTestJob(api, result.JobID); deleted.Code != http.StatusNoContent {
+		t.Fatalf("explicit job deletion status = %d, body: %s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uploaded workspace remains after explicit job deletion: err=%v", err)
 	}
 }
 
-func TestCancelQueuedUploadedJobRemovesWorkspaceImmediately(t *testing.T) {
+func TestDirectorySubmissionsCanBeDisabledWithoutDisablingArchiveUploads(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	api.config.AllowDirectoryAccess = false
+
+	directoryResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"synchronous"}`)
+	if directoryResponse.Code != http.StatusForbidden {
+		t.Fatalf("directory submission status = %d, body: %s", directoryResponse.Code, directoryResponse.Body.String())
+	}
+	if !strings.Contains(directoryResponse.Body.String(), `"code":"DIRECTORY_ACCESS_DISABLED"`) {
+		t.Fatalf("directory submission response lacks disable reason: %s", directoryResponse.Body.String())
+	}
+
+	directoryBody, directoryContentType := multipartArchiveRequest(t, nil, false)
+	directoryRequest := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", directoryBody)
+	directoryRequest.Header.Set("Content-Type", directoryContentType)
+	directoryRequest.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	directoryMultipartResponse := httptest.NewRecorder()
+	api.ServeHTTP(directoryMultipartResponse, directoryRequest)
+	if directoryMultipartResponse.Code != http.StatusForbidden {
+		t.Fatalf("multipart directory submission status = %d, body: %s", directoryMultipartResponse.Code, directoryMultipartResponse.Body.String())
+	}
+
+	body, contentType := multipartArchiveRequest(t, testArchive(t, "invoice.pdf", "source pdf"), true)
+	uploadRequest := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	uploadRequest.Header.Set("Content-Type", contentType)
+	uploadRequest.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	uploadResponse := httptest.NewRecorder()
+	api.ServeHTTP(uploadResponse, uploadRequest)
+	if uploadResponse.Code != http.StatusOK {
+		t.Fatalf("archive upload status = %d, body: %s", uploadResponse.Code, uploadResponse.Body.String())
+	}
+}
+
+func TestCancelQueuedUploadedJobPreservesWorkspaceForExplicitCleanup(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var executions int
@@ -279,8 +321,8 @@ func TestCancelQueuedUploadedJobRemovesWorkspaceImmediately(t *testing.T) {
 	if cancelResponse.Code != http.StatusOK || !strings.Contains(cancelResponse.Body.String(), `"status":"cancelled"`) {
 		t.Fatalf("queued cancellation status = %d, body: %s", cancelResponse.Code, cancelResponse.Body.String())
 	}
-	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancelled upload workspace still exists: err=%v", err)
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("cancelled upload workspace was removed automatically: err=%v", err)
 	}
 	cancelled, err := store.Get(accepted.JobID)
 	if err != nil || cancelled.Status != "cancelled" || cancelled.CompletedAt == nil {
@@ -289,10 +331,16 @@ func TestCancelQueuedUploadedJobRemovesWorkspaceImmediately(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("executor ran %d jobs, want only the blocker", executions)
 	}
+	if deleted := deleteTestJob(api, accepted.JobID); deleted.Code != http.StatusNoContent {
+		t.Fatalf("explicit job deletion status = %d, body: %s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled workspace remains after explicit deletion: err=%v", err)
+	}
 	close(release)
 }
 
-func TestCancelRunningUploadedJobStopsWorkAndRemovesWorkspace(t *testing.T) {
+func TestCancelRunningUploadedJobStopsWorkAndPreservesWorkspace(t *testing.T) {
 	started := make(chan struct{})
 	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
 		if err := markRunning("managed-container"); err != nil {
@@ -326,16 +374,22 @@ func TestCancelRunningUploadedJobStopsWorkAndRemovesWorkspace(t *testing.T) {
 	for time.Now().Before(deadline) {
 		job, err := store.Get(accepted.JobID)
 		_, statErr := os.Stat(workspace)
-		if err == nil && job.Status == "cancelled" && errors.Is(statErr, os.ErrNotExist) {
+		if err == nil && job.Status == "cancelled" && statErr == nil {
 			if job.CompletedAt == nil || job.Error == nil || job.Error.Code != "JOB_CANCELLED" {
 				t.Fatalf("cancelled outcome was not fully recorded: %#v", job)
+			}
+			if deleted := deleteTestJob(api, accepted.JobID); deleted.Code != http.StatusNoContent {
+				t.Fatalf("explicit job deletion status = %d, body: %s", deleted.Code, deleted.Body.String())
+			}
+			if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("cancelled workspace remains after explicit deletion: err=%v", err)
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	job, err := store.Get(accepted.JobID)
-	t.Fatalf("running uploaded job did not finish cancellation and cleanup: job=%#v err=%v", job, err)
+	t.Fatalf("running uploaded job did not finish cancellation while preserving data: job=%#v err=%v", job, err)
 }
 
 func TestDeleteTerminalUploadedJobRemovesWorkspaceAndMetadata(t *testing.T) {

@@ -92,18 +92,6 @@ func run(logger *slog.Logger) error {
 	if err := store.RecoverInterrupted(); err != nil {
 		return err
 	}
-	cancelledJobs, err := store.CancelledJobs()
-	if err != nil {
-		return err
-	}
-	for _, job := range cancelledJobs {
-		if !isUploadedJob(job) {
-			continue
-		}
-		if err := removeUploadedJobWorkspace(cfg.DataRoot, job); err != nil {
-			logger.Error("could not clean up cancelled uploaded job workspace", "job_id", job.ID, "error", err)
-		}
-	}
 
 	jobs := NewJobService(store, executor, cfg.MaxConcurrentJobs, logger)
 	server := &http.Server{

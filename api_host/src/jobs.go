@@ -330,38 +330,6 @@ func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
 	return ids, rows.Err()
 }
 
-func (s *JobStore) CancelledJobs() ([]Job, error) {
-	rows, err := s.db.Query(`SELECT id FROM jobs WHERE status='cancelled' ORDER BY queue_order`)
-	if err != nil {
-		return nil, fmt.Errorf("list cancelled jobs: %w", err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("read cancelled job ID: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, fmt.Errorf("read cancelled jobs: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close cancelled jobs: %w", err)
-	}
-	jobs := make([]Job, 0, len(ids))
-	for _, id := range ids {
-		job, err := s.Get(id)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, job)
-	}
-	return jobs, nil
-}
-
 type JobService struct {
 	store       *JobStore
 	executor    Executor
@@ -375,7 +343,6 @@ type JobService struct {
 	stopOnce    sync.Once
 	activeMu    sync.Mutex
 	active      map[string]context.CancelFunc
-	onCancel    func(Job) error
 	maintenance sync.RWMutex
 }
 
@@ -441,20 +408,12 @@ func (s *JobService) LockMaintenance() func() {
 	return s.maintenance.Unlock
 }
 
-func (s *JobService) SetCancellationCleanup(cleanup func(Job) error) {
-	s.activeMu.Lock()
-	defer s.activeMu.Unlock()
-	s.onCancel = cleanup
-}
-
 func (s *JobService) Cancel(id string) (Job, error) {
 	job, err := s.store.RequestCancel(id)
 	if err != nil {
 		return Job{}, err
 	}
 	switch job.Status {
-	case "cancelled":
-		s.cleanupCancelled(job)
 	case "cancelling":
 		s.activeMu.Lock()
 		cancel := s.active[id]
@@ -537,7 +496,6 @@ func (s *JobService) execute(job Job) {
 		return
 	}
 	if finished.Status == "cancelled" {
-		s.cleanupCancelled(finished)
 		s.logger.Info("OCR job cancelled", "job_id", job.ID)
 		return
 	}
@@ -550,17 +508,6 @@ func (s *JobService) execute(job Job) {
 		return
 	}
 	s.logger.Info("OCR job completed", "job_id", job.ID, "status", "succeeded")
-}
-
-func (s *JobService) cleanupCancelled(job Job) {
-	s.activeMu.Lock()
-	cleanup := s.onCancel
-	s.activeMu.Unlock()
-	if cleanup != nil {
-		if err := cleanup(job); err != nil {
-			s.logger.Error("could not clean up cancelled OCR job", "job_id", job.ID, "error", err)
-		}
-	}
 }
 
 func requireOneRow(result sql.Result, err error, operation string) error {

@@ -63,9 +63,11 @@ Do not point it at a path that is available only inside the API container.
 When you use the configurator in step 3, it creates the selected data-root
 directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
 OCR containers. You do not need to create the root manually. To use the
-shared-directory submission method, create the input/output subdirectories
-inside that root and put source files in the input directory. This is not
-needed for archive uploads: the API creates an isolated per-job workspace.
+shared-directory submission method, enable directory-based submissions in the
+configurator, then create the input/output subdirectories inside that root and
+put source files in the input directory. Directory submissions are disabled
+by default; archive uploads need no pre-created input or output directories
+because the API creates an isolated per-job workspace.
 
 ### 3. Configure runtime credentials
 
@@ -76,9 +78,12 @@ Create the runtime environment file with the interactive configurator:
 ```
 
 The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, and worker settings, creates the data-root directory with
-permissions for the containers, then saves `api_host/env/.env` with mode
-`600`. Enter the image and data-root values selected in step 2.
+Docker data root, worker settings, and whether directory-based submissions
+should be allowed. That option defaults to disabled, so use archive uploads
+unless you explicitly opt in to directory submissions. The script creates the
+data-root directory with permissions for the containers, then saves
+`api_host/env/.env` with mode `600`. Enter the image and data-root values
+selected in step 2.
 For the shared-directory example later in this guide, create its child
 directories after configuration (replace the root if you selected a different
 one):
@@ -280,11 +285,15 @@ curl --fail-with-body --silent --show-error \
   -o "result-${job_id}.tar.gz"
 ```
 
-The result is generated from the job's output directory when requested. The
-job-specific workspace, including its extracted input, is removed after the
-download succeeds. A later download attempt for that uploaded job returns
-`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
-JSON request, result downloads do not remove the shared output directory.
+The result is generated from the job's output directory when requested.
+Downloading does not remove the job-specific workspace or its extracted
+input; the result can be downloaded again later. Remove uploaded-job data
+explicitly with `DELETE /api/v1/jobs/${job_id}` after the job is terminal, or
+use `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to delete all
+terminal uploaded jobs. Cancelling a job also preserves its workspace until
+explicit cleanup. For jobs submitted with the original `inputPath` JSON
+request, result downloads do not remove the shared output directory, and
+deleting the job record does not remove shared input/output directories.
 
 ### 6. Monitor and stop the service
 

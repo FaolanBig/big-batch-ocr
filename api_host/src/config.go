@@ -12,16 +12,17 @@ import (
 )
 
 type Config struct {
-	Address           string
-	APIKey            string
-	AllowAnonymous    bool
-	DataRoot          string
-	DockerDataRoot    string
-	DatabasePath      string
-	OCRImage          string
-	OCRJobs           int
-	MaxConcurrentJobs int
-	SyncWaitLimit     time.Duration
+	Address              string
+	APIKey               string
+	AllowAnonymous       bool
+	AllowDirectoryAccess bool
+	DataRoot             string
+	DockerDataRoot       string
+	DatabasePath         string
+	OCRImage             string
+	OCRJobs              int
+	MaxConcurrentJobs    int
+	SyncWaitLimit        time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -39,6 +40,9 @@ func LoadConfig() (Config, error) {
 
 	var err error
 	if cfg.AllowAnonymous, err = envBool("ALLOW_ANONYMOUS", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.AllowDirectoryAccess, err = envBool("ALLOW_DIRECTORY_ACCESS", false); err != nil {
 		return Config{}, err
 	}
 	if !cfg.AllowAnonymous && cfg.APIKey == "" {
