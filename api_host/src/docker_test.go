@@ -75,7 +75,9 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 				t.Errorf("decode create request: %v", err)
 			}
 			if body.Image != "example/ocr:v1.0.0" || body.User != "65532:65532" ||
-				len(body.Env) != 2 || body.Env[0] != "OCR_JOBS=4" || body.Env[1] != "HOME=/tmp" {
+				len(body.Env) != 4 || body.Env[0] != "OCR_JOBS=4" ||
+				body.Env[1] != "OCR_LANGUAGE=deu+eng" ||
+				body.Env[2] != "OCR_OPTIMIZE=0" || body.Env[3] != "HOME=/tmp" {
 				t.Errorf("unexpected container config: %#v", body)
 			}
 			if len(body.HostConfig.Mounts) != 2 ||
@@ -116,6 +118,7 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 	var logs string
 	exitCode, err := executor.Run(context.Background(), Job{
 		ID: "job_test", InputHost: "/daemon/data/in", OutputHost: "/daemon/data/out",
+		OCRLanguage: "deu+eng", OCROptimize: 0,
 	}, func(id string) error {
 		runningID = id
 		return nil

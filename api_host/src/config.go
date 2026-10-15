@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/distribution/reference"
@@ -21,6 +22,8 @@ type Config struct {
 	DatabasePath         string
 	OCRImage             string
 	OCRJobs              int
+	OCRLanguage          string
+	OCROptimize          int
 	MaxConcurrentJobs    int
 	SyncWaitLimit        time.Duration
 }
@@ -34,6 +37,8 @@ func LoadConfig() (Config, error) {
 		DatabasePath:      envOr("DATABASE_PATH", "/var/lib/api-host/jobs.db"),
 		OCRImage:          os.Getenv("OCR_IMAGE"),
 		OCRJobs:           3,
+		OCRLanguage:       envOr("OCR_LANGUAGE", "eng"),
+		OCROptimize:       3,
 		MaxConcurrentJobs: 1,
 		SyncWaitLimit:     30 * time.Second,
 	}
@@ -66,6 +71,12 @@ func LoadConfig() (Config, error) {
 	if cfg.OCRJobs, err = envPositiveInt("OCR_JOBS", cfg.OCRJobs); err != nil {
 		return Config{}, err
 	}
+	if cfg.OCRLanguage, err = validateOCRLanguage(cfg.OCRLanguage); err != nil {
+		return Config{}, fmt.Errorf("OCR_LANGUAGE: %w", err)
+	}
+	if cfg.OCROptimize, err = envOCROptimize("OCR_OPTIMIZE", cfg.OCROptimize); err != nil {
+		return Config{}, err
+	}
 	if cfg.MaxConcurrentJobs, err = envPositiveInt("MAX_CONCURRENT_JOBS", cfg.MaxConcurrentJobs); err != nil {
 		return Config{}, err
 	}
@@ -75,6 +86,51 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.SyncWaitLimit = time.Duration(waitSeconds) * time.Second
 	return cfg, nil
+}
+
+func validateOCRLanguage(value string) (string, error) {
+	if len(value) == 0 || len(value) > 128 {
+		return "", errors.New("must be one or more language codes separated by '+'")
+	}
+	for _, code := range strings.Split(value, "+") {
+		if code == "" {
+			return "", errors.New("must be one or more language codes separated by '+'")
+		}
+		for _, character := range code {
+			if !((character >= 'a' && character <= 'z') ||
+				(character >= 'A' && character <= 'Z') ||
+				(character >= '0' && character <= '9') || character == '_') {
+				return "", errors.New("language codes may contain only letters, digits, or underscores, separated by '+'")
+			}
+		}
+	}
+	return value, nil
+}
+
+func validateOCROptimize(value int) (int, error) {
+	if value < 0 || value > 3 {
+		return 0, errors.New("must be an integer from 0 to 3")
+	}
+	return value, nil
+}
+
+func envOCROptimize(key string, fallback int) (int, error) {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		return fallback, nil
+	}
+	parsed, err := parseOCROptimize(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer from 0 to 3", key)
+	}
+	return parsed, nil
+}
+
+func parseOCROptimize(value string) (int, error) {
+	if len(value) != 1 || value[0] < '0' || value[0] > '3' {
+		return 0, errors.New("must be an integer from 0 to 3")
+	}
+	return int(value[0] - '0'), nil
 }
 
 func validateOCRImage(value string) (string, error) {

@@ -13,6 +13,8 @@ docker run --rm -it \
 	-v /path/to/input:/source:ro \
 	-v /path/to/output:/destination \
 	-e OCR_JOBS=4 \
+	-e OCR_LANGUAGE=deu+eng \
+	-e OCR_OPTIMIZE=2 \
 	"$IMAGE"
 ```
 
@@ -42,6 +44,20 @@ docker run --rm -it \
 ```
 
 Replace the example host paths and adjust `OCR_JOBS` to set the number of OCR threads. If omitted, the script uses 75% of the logical CPU count reported by `nproc --all`.
+`OCR_LANGUAGE` defaults to `eng` and accepts installed OCRmyPDF/Tesseract
+language codes joined by `+`; `OCR_OPTIMIZE` defaults to `3` and accepts `0`
+through `3`. The container entrypoint also accepts the explicit
+`--language CODE` and `--optimize LEVEL` options, which override these
+environment defaults. Other OCRmyPDF arguments are not accepted.
+
+For example, the same configuration can be supplied as entrypoint options:
+
+```bash
+docker run --rm -it \
+	-v /path/to/input:/source:ro \
+	-v /path/to/output:/destination \
+	"$IMAGE" --language deu+eng --optimize 2
+```
 
 ## Run the script
 

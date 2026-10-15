@@ -54,12 +54,21 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 		}
 	}
 
+	ocrOptions := OCROptions{Language: job.OCRLanguage, Optimize: job.OCROptimize}
+	if ocrOptions.Language == "" {
+		ocrOptions = defaultOCROptions(nil)
+	}
 	containerName := "api-host-" + job.ID
 	response, err := e.client.ContainerCreate(ctx,
 		&container.Config{
 			Image: e.image,
 			User:  "65532:65532",
-			Env:   []string{"OCR_JOBS=" + strconv.Itoa(e.jobs), "HOME=/tmp"},
+			Env: []string{
+				"OCR_JOBS=" + strconv.Itoa(e.jobs),
+				"OCR_LANGUAGE=" + ocrOptions.Language,
+				"OCR_OPTIMIZE=" + strconv.Itoa(ocrOptions.Optimize),
+				"HOME=/tmp",
+			},
 			Labels: map[string]string{
 				"com.faolanbig.big-batch-ocr.managed": "true",
 				"com.faolanbig.big-batch-ocr.job-id":  job.ID,

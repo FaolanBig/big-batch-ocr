@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -35,7 +35,7 @@
         ],
         "operationId": "submitOcrJob",
         "summary": "Submit an OCR job",
-        "description": "Submits an OCR job in the requested mode. Synchronous mode waits for the container to finish and returns the terminal result. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
+        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. Synchronous mode waits for the container to finish and returns the terminal result. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
         "requestBody": {
           "required": true,
           "content": {
@@ -57,7 +57,9 @@
                   "value": {
                     "inputPath": "incoming/invoices",
                     "outputPath": "processed/invoices",
-                    "mode": "asynchronous"
+                    "mode": "asynchronous",
+                    "language": "deu+eng",
+                    "optimize": 2
                   }
                 },
                 "createMissingDestination": {
@@ -688,6 +690,18 @@
             "type": "boolean",
             "default": false,
             "description": "When true, the host may create the missing destination directory, and any missing parent directories, only beneath the configured data root. When omitted or false, a missing destination is rejected."
+          },
+          "language": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(\\+[A-Za-z0-9_]+)*$",
+            "maxLength": 128,
+            "description": "Optional OCRmyPDF language code or '+'-separated codes, such as 'eng' or 'deu+eng'. Defaults to the API host's OCR_LANGUAGE."
+          },
+          "optimize": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "Optional OCRmyPDF optimization level. Defaults to the API host's OCR_OPTIMIZE."
           }
         }
       },
@@ -719,6 +733,18 @@
           "createDestination": {
             "type": "boolean",
             "default": false
+          },
+          "language": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(\\+[A-Za-z0-9_]+)*$",
+            "maxLength": 128,
+            "description": "Optional OCRmyPDF language code or '+'-separated codes, such as 'eng' or 'deu+eng'. Defaults to OCR_LANGUAGE."
+          },
+          "optimize": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "Optional OCRmyPDF optimization level. Defaults to OCR_OPTIMIZE."
           }
         },
         "required": [
@@ -1044,7 +1070,7 @@
     },
     "responses": {
       "BadRequest": {
-        "description": "Malformed JSON or invalid request shape.",
+        "description": "Malformed JSON, invalid request shape, or OCR options that do not satisfy the documented language and optimization constraints.",
         "content": {
           "application/problem+json": {
             "schema": {

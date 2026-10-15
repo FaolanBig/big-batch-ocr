@@ -64,7 +64,28 @@ You can optionally set the number of OCRmyPDF worker threads. The default is 3/4
 OCR_JOBS=4 bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 ```
 
-`OCR_JOBS` must be a positive integer. Files are processed sequentially, but OCRmyPDF can use multiple threads internally according to this setting.
+The language and image optimization level are also configurable. CLI options
+override their corresponding environment variables:
+
+```bash
+bash src/ocr_sequencial.sh \
+  --language deu+eng \
+  --optimize 2 \
+  "/path/to/source" "/path/to/target"
+```
+
+`--language` (or `-l`) accepts one or more OCRmyPDF/Tesseract language codes
+joined with `+`; `--optimize` accepts only levels `0` through `3`. The
+equivalent `OCR_LANGUAGE` and `OCR_OPTIMIZE` environment variables default to
+`eng` and `3`. Languages must be installed in the OCRmyPDF environment. These
+are the only configurable OCRmyPDF options; processing flags such as rotation,
+deskew, cleanup, output type, and skipping existing text remain fixed. Invalid
+values and unknown command-line options are rejected. The selected language
+and optimization level are included in resume markers, so changing either
+causes completed PDFs to be reprocessed.
+
+`OCR_JOBS` must be a positive integer. Files are processed sequentially, but
+OCRmyPDF can use multiple threads internally according to this setting.
 
 ## Directories and Limitations
 
@@ -93,7 +114,8 @@ PDF files are processed one at a time. For each file, the script runs OCRmyPDF w
 
 - `--rotate-pages` and `--deskew` correct page orientation and skew.
 - `--clean` and `--clean-final` clean page images, including in the final document.
-- `--optimize 3` enables optimization level 3.
+- `--language` uses the configured `OCR_LANGUAGE` value (default `eng`).
+- `--optimize` uses the configured `OCR_OPTIMIZE` level (default `3`).
 - `--output-type pdf` specifies the output format.
 - `--skip-text` skips pages that already contain text.
 - `--jobs` uses the positive-integer value of `OCR_JOBS` when provided; otherwise, it defaults to 3/4 of the logical CPU count reported by `nproc --all`.
