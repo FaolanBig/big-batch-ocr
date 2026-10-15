@@ -509,6 +509,34 @@ func TestBulkCleanupUploadsRemovesOnlyTerminalUploadedJobs(t *testing.T) {
 	}
 }
 
+func TestBulkCleanupUploadsIsIdempotentWhenWorkspaceParentsAreMissing(t *testing.T) {
+	api, store, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	job, err := store.CreateWithID(
+		"job_removed_upload_workspace",
+		".api-host/jobs/job_removed_upload_workspace/input",
+		".api-host/jobs/job_removed_upload_workspace/output",
+		"/daemon/data/.api-host/jobs/job_removed_upload_workspace/input",
+		"/daemon/data/.api-host/jobs/job_removed_upload_workspace/output",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=? WHERE id=?`,
+		formatDBTime(time.Now().UTC()), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := cleanupJobsTestRequest(api, `{"scope":"uploads"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cleanup status = %d, body: %s", response.Code, response.Body.String())
+	}
+	if _, err := store.Get(job.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("job metadata remains after idempotent cleanup: %v", err)
+	}
+}
+
 func TestBulkCleanupAllIgnoresActiveAndProtectsSharedPaths(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -589,6 +617,42 @@ func TestBulkCleanupAllIgnoresActiveAndProtectsSharedPaths(t *testing.T) {
 		}
 	}
 	close(release)
+}
+
+func TestBulkCleanupAllIgnoresActiveJobWithUnresolvablePaths(t *testing.T) {
+	api, store, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	_, err := store.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at)
+		VALUES(?,?,?,?,?,?,?)`, "job_unsafe_active", "running", "../outside", "output",
+		"/outside", filepath.Join(api.config.DataRoot, "output"), formatDBTime(time.Now().UTC()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,completed_at)
+		VALUES(?,?,?,?,?,?,?,?)`, "job_terminal_protected", "succeeded", "input", "output",
+		filepath.Join(api.config.DataRoot, "input"), filepath.Join(api.config.DataRoot, "output"),
+		formatDBTime(time.Now().UTC()), formatDBTime(time.Now().UTC()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := cleanupJobsTestRequest(api, `{"scope":"all"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cleanup status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var result cleanupResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveJobsSkipped != 1 || result.JobsSkippedForActiveData != 1 {
+		t.Fatalf("unexpected cleanup result: %#v", result)
+	}
+	for _, id := range []string{"job_unsafe_active", "job_terminal_protected"} {
+		if _, err := store.Get(id); err != nil {
+			t.Fatalf("protected job %s was deleted: %v", id, err)
+		}
+	}
 }
 
 func TestMultipartArchiveRejectsTraversal(t *testing.T) {

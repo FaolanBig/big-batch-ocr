@@ -48,11 +48,12 @@ type cleanupRequest struct {
 }
 
 type cleanupResult struct {
-	Scope                    string `json:"scope"`
-	JobsDeleted              int    `json:"jobsDeleted"`
-	ActiveJobsSkipped        int    `json:"activeJobsSkipped"`
-	JobsSkippedForActiveData int    `json:"jobsSkippedForActiveData"`
-	JobsSkippedForServerData int    `json:"jobsSkippedForServerData"`
+	Scope                     string `json:"scope"`
+	JobsDeleted               int    `json:"jobsDeleted"`
+	ActiveJobsSkipped         int    `json:"activeJobsSkipped"`
+	JobsSkippedForActiveData  int    `json:"jobsSkippedForActiveData"`
+	JobsSkippedForServerData  int    `json:"jobsSkippedForServerData"`
+	JobsSkippedForUnsafePaths int    `json:"jobsSkippedForUnsafePaths"`
 }
 
 type problem struct {
@@ -376,6 +377,9 @@ func removeUploadedJobWorkspace(dataRoot string, job Job) error {
 	}
 	for _, directory := range []string{filepath.Dir(jobsRoot), jobsRoot} {
 		info, err := os.Lstat(directory)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("inspect job workspace parent: %w", err)
 		}
@@ -480,6 +484,7 @@ func (a *API) cleanupJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	result := cleanupResult{Scope: request.Scope}
 	var activePaths []string
+	activePathsUnsafe := false
 	for _, job := range allJobs {
 		if terminalJob(job.Status) {
 			continue
@@ -491,10 +496,9 @@ func (a *API) cleanupJobs(w http.ResponseWriter, r *http.Request) {
 		for _, relative := range []string{job.InputPath, job.OutputPath} {
 			directory, exists, err := resolveJobDirectory(a.config.DataRoot, relative)
 			if err != nil {
-				a.logger.Error("could not resolve active OCR job path during cleanup", "job_id", job.ID, "error", err)
-				writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
-					"Job data could not be cleaned up safely.")
-				return
+				a.logger.Warn("could not resolve active OCR job path during cleanup; protecting shared directories", "job_id", job.ID, "error", err)
+				activePathsUnsafe = true
+				continue
 			}
 			if exists {
 				activePaths = append(activePaths, directory)
@@ -507,15 +511,15 @@ func (a *API) cleanupJobs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if request.Scope == "all" && !isUploadedJob(job) {
-			protected := false
+			protected := activePathsUnsafe
 			serverData := false
+			unsafePath := false
 			for _, relative := range []string{job.InputPath, job.OutputPath} {
 				directory, exists, err := resolveJobDirectory(a.config.DataRoot, relative)
 				if err != nil {
-					a.logger.Error("could not resolve terminal OCR job path during cleanup", "job_id", job.ID, "error", err)
-					writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
-						"Job data could not be cleaned up safely.")
-					return
+					a.logger.Warn("could not resolve terminal OCR job path during cleanup; preserving job data", "job_id", job.ID, "error", err)
+					unsafePath = true
+					continue
 				}
 				if !exists {
 					continue
@@ -533,6 +537,10 @@ func (a *API) cleanupJobs(w http.ResponseWriter, r *http.Request) {
 				if protected {
 					break
 				}
+			}
+			if unsafePath {
+				result.JobsSkippedForUnsafePaths++
+				continue
 			}
 			if protected {
 				result.JobsSkippedForActiveData++

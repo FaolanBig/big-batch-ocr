@@ -63,6 +63,7 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 			sawCreate = true
 			var body struct {
 				Image      string            `json:"Image"`
+				User       string            `json:"User"`
 				Env        []string          `json:"Env"`
 				Labels     map[string]string `json:"Labels"`
 				HostConfig struct {
@@ -73,7 +74,8 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode create request: %v", err)
 			}
-			if body.Image != "example/ocr:v1.0.0" || len(body.Env) != 1 || body.Env[0] != "OCR_JOBS=4" {
+			if body.Image != "example/ocr:v1.0.0" || body.User != "65532:65532" ||
+				len(body.Env) != 2 || body.Env[0] != "OCR_JOBS=4" || body.Env[1] != "HOME=/tmp" {
 				t.Errorf("unexpected container config: %#v", body)
 			}
 			if len(body.HostConfig.Mounts) != 2 ||

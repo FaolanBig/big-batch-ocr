@@ -59,9 +59,13 @@ Compose bind mounts that host directory at `/data` inside the API container.
 Keep the two roots aligned as shown so a validated relative path maps to the
 same host files for the OCR container. The configurator creates the selected
 data-root directory with mode `0750` and owner UID/GID `65532`, used by the API
-and OCR containers. If you use the manual `.env` template workflow, create the
-root yourself with the same ownership and permissions. Input is bind-mounted
-read-only at `/source`; output is read-write at `/destination`.
+and managed OCR containers. OCR containers run as UID/GID `65532` so files
+they create can be removed by the non-root API host. If you use the manual
+`.env` template workflow, create the root yourself with the same ownership and
+permissions. Existing output files created by older root-running OCR
+containers may still need a one-time ownership/permission repair before API
+cleanup can remove them. Input is bind-mounted read-only at `/source`; output
+is read-write at `/destination`.
 
 The named `api-host-state` volume persists the SQLite job database. Back it up
 with the host data. It retains container IDs and the last 32 KiB of captured
