@@ -248,9 +248,11 @@ and `exitCode` fields. Do not resubmit just because a client times out or
 disconnects after acceptance.
 
 For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
-up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns a
-terminal result or a `504` containing the accepted job ID and status URL. The
-job is not cancelled at the wait limit; poll its status URL.
+up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
+the processed `.tar.gz` archive (with the job ID in the `X-Job-ID` header) or a
+`504` containing the accepted job ID and status URL. The job is not cancelled
+at the wait limit; poll its status URL and download its result after it
+succeeds.
 
 Instead of placing input files on the shared data volume manually, upload a
 `.tar.gz` archive as multipart form data. Set `mode`; do not set `inputPath` or

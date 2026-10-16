@@ -35,7 +35,7 @@
         ],
         "operationId": "submitOcrJob",
         "summary": "Submit an OCR job",
-        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. Synchronous mode waits for the container to finish and returns the terminal result. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
+        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. Synchronous mode waits for the container to finish and returns the resulting tar.gz archive directly, with the job ID in the X-Job-ID response header. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
         "requestBody": {
           "required": true,
           "content": {
@@ -87,22 +87,28 @@
         },
         "responses": {
           "200": {
-            "description": "Synchronous job completed successfully.",
-            "content": {
-              "application/json": {
+            "description": "Synchronous job completed successfully; the response body is its processed output archive.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Suggested download filename.",
                 "schema": {
-                  "$ref": "#/components/schemas/SynchronousJobResult"
+                  "type": "string"
                 },
-                "example": {
-                  "jobId": "job_01J9M7X2K6",
-                  "status": "succeeded",
-                  "inputPath": "incoming/invoices",
-                  "outputPath": "processed/invoices",
-                  "createdAt": "2026-10-12T14:10:00Z",
-                  "startedAt": "2026-10-12T14:10:01Z",
-                  "completedAt": "2026-10-12T14:10:18Z",
-                  "exitCode": 0,
-                  "statusUrl": "/api/v1/jobs/job_01J9M7X2K6"
+                "example": "attachment; filename=\"job_01J9M7X2K6.tar.gz\""
+              },
+              "X-Job-ID": {
+                "description": "Identifier of the completed job.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "job_01J9M7X2K6"
+              }
+            },
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -572,6 +578,13 @@
                   "type": "string"
                 },
                 "example": "attachment; filename=\"job_01J9M7X2K6.tar.gz\""
+              },
+              "X-Job-ID": {
+                "description": "Identifier of the completed job.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "job_01J9M7X2K6"
               }
             },
             "content": {
@@ -961,56 +974,6 @@
               }
             ],
             "description": "Safe, client-facing failure information for a failed job; null until a failure is recorded."
-          },
-          "statusUrl": {
-            "type": "string",
-            "format": "uri-reference"
-          }
-        }
-      },
-      "SynchronousJobResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "jobId",
-          "status",
-          "inputPath",
-          "outputPath",
-          "createdAt",
-          "startedAt",
-          "completedAt",
-          "exitCode",
-          "statusUrl"
-        ],
-        "properties": {
-          "jobId": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "const": "succeeded"
-          },
-          "inputPath": {
-            "type": "string"
-          },
-          "outputPath": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "startedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "exitCode": {
-            "type": "integer",
-            "const": 0
           },
           "statusUrl": {
             "type": "string",

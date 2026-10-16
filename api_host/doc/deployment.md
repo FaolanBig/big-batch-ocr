@@ -188,10 +188,12 @@ accept arbitrary OCRmyPDF or Docker arguments. For example, use
 fields for an archive upload.
 
 For synchronous execution, set `"mode":"synchronous"`. On success the host
-returns `200`; a container failure returns a safe `500` problem response. At
-the configured wait limit it returns `504` with `jobId` and `statusUrl`, and
-the job continues. Poll that URL rather than resubmitting. The request's
-disconnect likewise does not cancel an accepted job.
+returns `200` with the processed `.tar.gz` archive in the response body and
+the completed job ID in the `X-Job-ID` header; a container failure returns a
+safe `500` problem response. At the configured wait limit it returns `504`
+with `jobId` and `statusUrl`, and the job continues. Poll that URL rather than
+resubmitting. The request's disconnect likewise does not cancel an accepted
+job.
 
 By default, both paths must exist as directories beneath `DATA_ROOT`. To
 explicitly create a missing output path and its parent directories, include
