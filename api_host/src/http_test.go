@@ -145,6 +145,12 @@ func TestAsyncJobThenStatusAndSyncSuccess(t *testing.T) {
 	if syncResponse.Code != http.StatusOK {
 		t.Fatalf("sync status = %d, body: %s", syncResponse.Code, syncResponse.Body.String())
 	}
+	if got := syncResponse.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("sync content type = %q", got)
+	}
+	if syncResponse.Header().Get("X-Job-ID") == "" {
+		t.Fatal("sync result did not include the job ID header")
+	}
 }
 
 func TestSubmitJobAcceptsValidatedOCROverrides(t *testing.T) {
@@ -223,18 +229,38 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
 	}
-	var result struct {
-		JobID string `json:"jobId"`
+	jobID := response.Header().Get("X-Job-ID")
+	if jobID == "" {
+		t.Fatal("synchronous result did not include an X-Job-ID header")
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+	if got := response.Header().Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("synchronous result content type = %q", got)
+	}
+	if got := response.Header().Get("Content-Disposition"); !strings.Contains(got, jobID+".tar.gz") {
+		t.Fatalf("synchronous result disposition = %q", got)
+	}
+	gzipReader, err := gzip.NewReader(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("synchronous response is not a gzip archive: %v", err)
+	}
+	tarReader := tar.NewReader(gzipReader)
+	header, err := tarReader.Next()
+	if err != nil {
+		t.Fatalf("synchronous archive has no result entry: %v", err)
+	}
+	if header.Name != "recognized.txt" {
+		t.Fatalf("synchronous archive filename = %q", header.Name)
+	}
+	content, err := io.ReadAll(tarReader)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if result.JobID == "" {
-		t.Fatal("synchronous result did not include a job ID")
+	if string(content) != "recognized text" {
+		t.Fatalf("synchronous archive file content = %q", content)
 	}
 
 	download := httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID+"/result", nil)
 	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	api.ServeHTTP(download, request)
 	if download.Code != http.StatusOK {
@@ -243,29 +269,29 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	if got := download.Header().Get("Content-Type"); got != "application/gzip" {
 		t.Fatalf("download content type = %q", got)
 	}
-	if got := download.Header().Get("Content-Disposition"); !strings.Contains(got, result.JobID+".tar.gz") {
+	if got := download.Header().Get("Content-Disposition"); !strings.Contains(got, jobID+".tar.gz") {
 		t.Fatalf("download disposition = %q", got)
 	}
-	gzipReader, err := gzip.NewReader(bytes.NewReader(download.Body.Bytes()))
+	gzipReader, err = gzip.NewReader(bytes.NewReader(download.Body.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tarReader := tar.NewReader(gzipReader)
-	header, err := tarReader.Next()
+	tarReader = tar.NewReader(gzipReader)
+	header, err = tarReader.Next()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if header.Name != "recognized.txt" {
 		t.Fatalf("downloaded filename = %q", header.Name)
 	}
-	content, err := io.ReadAll(tarReader)
+	content, err = io.ReadAll(tarReader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(content) != "recognized text" {
 		t.Fatalf("downloaded file content = %q", content)
 	}
-	jobDirectory := filepath.Join(api.config.DataRoot, ".api-host", "jobs", result.JobID)
+	jobDirectory := filepath.Join(api.config.DataRoot, ".api-host", "jobs", jobID)
 	if _, err := os.Stat(jobDirectory); err != nil {
 		t.Fatalf("uploaded job workspace was removed by download: err=%v", err)
 	}
@@ -273,14 +299,14 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 		t.Fatalf("existing shared output was unexpectedly removed: %v", err)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+result.JobID+"/result", nil)
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID+"/result", nil)
 	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
 	repeatedDownload := httptest.NewRecorder()
 	api.ServeHTTP(repeatedDownload, request)
 	if repeatedDownload.Code != http.StatusOK {
 		t.Fatalf("repeated download status = %d, body: %s", repeatedDownload.Code, repeatedDownload.Body.String())
 	}
-	if deleted := deleteTestJob(api, result.JobID); deleted.Code != http.StatusNoContent {
+	if deleted := deleteTestJob(api, jobID); deleted.Code != http.StatusNoContent {
 		t.Fatalf("explicit job deletion status = %d, body: %s", deleted.Code, deleted.Body.String())
 	}
 	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
@@ -576,13 +602,11 @@ func TestDeleteSharedDirectoryJobLeavesInputAndOutputDirectories(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
 	}
-	var result struct {
-		JobID string `json:"jobId"`
+	jobID := response.Header().Get("X-Job-ID")
+	if jobID == "" {
+		t.Fatal("synchronous response did not include an X-Job-ID header")
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if deleted := deleteTestJob(api, result.JobID); deleted.Code != http.StatusNoContent {
+	if deleted := deleteTestJob(api, jobID); deleted.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d, body: %s", deleted.Code, deleted.Body.String())
 	}
 	for _, name := range []string{"input", "output"} {

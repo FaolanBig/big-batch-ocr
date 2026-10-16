@@ -192,13 +192,16 @@ curl --fail-with-body \
 
   For uploaded archive submissions, send `inputArchive` and `mode` as multipart
   form data and omit `inputPath` and `outputPath`. After the job succeeds,
-  download `/api/v1/jobs/<jobId>/result` to retrieve a `.tar.gz` of the processed
-  files. See the [API host quickstart](./api_host/doc/quickstart-and-worker-setup.md)
-  for complete upload, polling, and download examples.
+  asynchronous jobs can be downloaded from `/api/v1/jobs/<jobId>/result`.
+  Synchronous submissions return the processed `.tar.gz` archive directly; the
+  `X-Job-ID` response header identifies the completed job. See the
+  [API host quickstart](./api_host/doc/quickstart-and-worker-setup.md) for
+  complete upload, polling, and download examples.
 
   To wait for completion in the submit request instead, use
 `"mode":"synchronous"`; if the configured wait limit is reached, the job
-continues and the response provides a status URL to poll.
+continues and the problem response provides a status URL to poll before
+downloading its result.
 
 The API rejects paths outside the configured data root, path traversal and
 symlink escapes, unreadable inputs, and identical or nested input/output

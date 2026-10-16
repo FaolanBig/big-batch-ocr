@@ -23,8 +23,8 @@ runtime:
   scripts:
     - type: after-response
       code: |-
-        const data = res.getBody();
-        bru.setEnvVar("jobId", data.jobId);
+        const jobId = res.getHeader("X-Job-ID");
+        bru.setEnvVar("jobId", jobId);
 
 settings:
   encodeUrl: true

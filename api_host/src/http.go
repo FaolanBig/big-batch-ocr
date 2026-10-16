@@ -647,12 +647,7 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 		}
 		switch job.Status {
 		case "succeeded":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"jobId": job.ID, "status": job.Status, "inputPath": job.InputPath,
-				"outputPath": job.OutputPath, "createdAt": job.CreatedAt,
-				"startedAt": job.StartedAt, "completedAt": job.CompletedAt,
-				"exitCode": job.ExitCode, "statusUrl": job.StatusURL,
-			})
+			a.writeJobResultArchive(w, job)
 			return
 		case "failed":
 			writeJSONContentType(w, http.StatusInternalServerError, problem{
@@ -830,6 +825,11 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The processed files are available only after the job succeeds.")
 		return
 	}
+	a.writeJobResultArchive(w, job)
+}
+
+func (a *API) writeJobResultArchive(w http.ResponseWriter, job Job) {
+	id := job.ID
 	root, err := filepath.EvalSymlinks(a.config.DataRoot)
 	if err != nil {
 		a.logger.Error("could not resolve data root for job result", "job_id", id, "error", err)
@@ -896,6 +896,7 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The job result could not be read.")
 		return
 	}
+	w.Header().Set("X-Job-ID", job.ID)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.tar.gz"`, job.ID))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", archiveInfo.Size()))
