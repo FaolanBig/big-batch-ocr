@@ -103,7 +103,7 @@ if (( $# == 1 )); then
     exit 1
   fi
 else
-  standard_image=big-batch-ocr-api-host:testing
+  standard_image=big-batch-ocr-api-host:direct
   proxied_image=big-batch-ocr-api-host:proxied
   has_standard=false
   has_proxied=false

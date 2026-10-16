@@ -12,7 +12,7 @@ bash api_host/build/build_dockerfile.sh
 bash api_host/build/build_dockerfile_proxied_cert.sh
 ```
 
-The standard script builds `big-batch-ocr-api-host:testing`. The proxied
+The standard script builds `big-batch-ocr-api-host:direct`. The proxied
 script builds `big-batch-ocr-api-host:proxied` and uses the readable
 certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
 BuildKit secret. The CA is mounted only while Go downloads modules; it is not

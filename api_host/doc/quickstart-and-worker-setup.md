@@ -343,7 +343,7 @@ sudo docker run -d --name api-host --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/big-batch-ocr-data:/data:rw \
   -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+  big-batch-ocr-api-host:direct
 ```
 
 This configures two in-process queue workers, with each OCR container using

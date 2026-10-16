@@ -6,5 +6,5 @@ cd -- "$repo_root"
 
 sudo docker buildx build --load \
   -f api_host/docker/Dockerfile \
-  -t big-batch-ocr-api-host:testing \
+  -t big-batch-ocr-api-host:direct \
   "$repo_root"
