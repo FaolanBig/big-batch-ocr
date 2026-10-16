@@ -80,6 +80,7 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
 	api.mux.Handle("DELETE /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.deleteJob)))
 	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
+	api.mux.Handle("POST /api/v1/jobs/{jobId}/resume", api.authenticate(http.HandlerFunc(api.resumeJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
 	return api
 }
@@ -736,6 +737,31 @@ func (a *API) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusConflict, "Job is already terminal", "JOB_NOT_CANCELLABLE",
 			"Only queued or running jobs can be cancelled.")
 	}
+}
+
+func (a *API) resumeJob(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Resume(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if errors.Is(err, ErrJobNotResumable) {
+		writeProblem(w, http.StatusConflict, "Job cannot be resumed", "JOB_NOT_RESUMABLE",
+			"Only failed or cancelled jobs can be resumed.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not resume OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be resumed.")
+		return
+	}
+	w.Header().Set("Location", job.StatusURL)
+	writeJSON(w, http.StatusAccepted, acknowledgement{JobID: job.ID, Status: "queued", StatusURL: job.StatusURL})
 }
 
 func (a *API) deleteJob(w http.ResponseWriter, r *http.Request) {

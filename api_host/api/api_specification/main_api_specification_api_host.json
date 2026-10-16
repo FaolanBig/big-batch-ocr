@@ -474,6 +474,81 @@
         }
       }
     },
+    "/api/v1/jobs/{jobId}/resume": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "resumeOcrJob",
+        "summary": "Resume a failed or cancelled OCR job",
+        "description": "Requeues the existing job using its current job ID, stored input and output paths, and OCR settings. The previous attempt's start/completion timestamps, exit code, error, container ID, and logs are cleared. Resumed jobs are added to the end of the queue. Only jobs with status `failed` or `cancelled` can be resumed.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The job was accepted for retry.",
+            "headers": {
+              "Location": {
+                "description": "URL for polling the resumed job's status.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                },
+                "example": "/api/v1/jobs/job_01J9M7X2K6"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAcknowledgement"
+                },
+                "example": {
+                  "jobId": "job_01J9M7X2K6",
+                  "status": "queued",
+                  "statusUrl": "/api/v1/jobs/job_01J9M7X2K6"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job exists but is not failed or cancelled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Job cannot be resumed",
+                  "status": 409,
+                  "code": "JOB_NOT_RESUMABLE",
+                  "detail": "Only failed or cancelled jobs can be resumed."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The resume request could not be persisted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{jobId}/result": {
       "get": {
         "tags": [

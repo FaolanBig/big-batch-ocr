@@ -54,6 +54,8 @@ type JobStore struct {
 	db *sql.DB
 }
 
+var ErrJobNotResumable = errors.New("job is not resumable")
+
 func OpenJobStore(path string) (*JobStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
@@ -301,6 +303,43 @@ func (s *JobStore) RequestCancel(id string) (Job, error) {
 	return s.Get(id)
 }
 
+func (s *JobStore) Resume(id string) (Job, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Job{}, fmt.Errorf("begin job resume: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE jobs SET status='queued',queue_order=(SELECT COALESCE(MAX(queue_order),0)+1 FROM jobs),
+		started_at=NULL,completed_at=NULL,exit_code=NULL,error_code=NULL,error_message=NULL,
+		container_id=NULL,container_logs=NULL
+		WHERE id=? AND status IN ('failed','cancelled')`, id)
+	if err != nil {
+		return Job{}, fmt.Errorf("requeue terminal job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Job{}, fmt.Errorf("inspect requeued job: %w", err)
+	}
+	if changed == 0 {
+		var exists int
+		if err := tx.QueryRow(`SELECT 1 FROM jobs WHERE id=?`, id).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return Job{}, sql.ErrNoRows
+			}
+			return Job{}, fmt.Errorf("check job before resume: %w", err)
+		}
+		return Job{}, ErrJobNotResumable
+	}
+	if _, err := tx.Exec(`UPDATE sqlite_sequence SET seq=MAX(seq,(SELECT COALESCE(MAX(queue_order),0) FROM jobs))
+		WHERE name='jobs'`); err != nil {
+		return Job{}, fmt.Errorf("update job queue sequence: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fmt.Errorf("commit job resume: %w", err)
+	}
+	return s.Get(id)
+}
+
 func (s *JobStore) SetLogs(id string, logs []byte) error {
 	result, err := s.db.Exec(`UPDATE jobs SET container_logs=? WHERE id=?`, string(logs), id)
 	return requireOneRow(result, err, "persist OCR container logs")
@@ -482,6 +521,17 @@ func (s *JobService) Cancel(id string) (Job, error) {
 			cancel()
 		}
 	}
+	return job, nil
+}
+
+func (s *JobService) Resume(id string) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
+	job, err := s.store.Resume(id)
+	if err != nil {
+		return Job{}, err
+	}
+	s.signal()
 	return job, nil
 }
 
