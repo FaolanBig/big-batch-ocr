@@ -37,6 +37,13 @@ type Job struct {
 	OutputHost    string `json:"-"`
 	ContainerID   string `json:"-"`
 	ContainerLogs string `json:"-"`
+	OCRLanguage   string `json:"-"`
+	OCROptimize   int    `json:"-"`
+}
+
+type OCROptions struct {
+	Language string
+	Optimize int
 }
 
 type Executor interface {
@@ -46,6 +53,8 @@ type Executor interface {
 type JobStore struct {
 	db *sql.DB
 }
+
+var ErrJobNotResumable = errors.New("job is not resumable")
 
 func OpenJobStore(path string) (*JobStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -73,11 +82,17 @@ func OpenJobStore(path string) (*JobStore, error) {
 			error_code TEXT,
 			error_message TEXT,
 			container_id TEXT,
-			container_logs TEXT
+			container_logs TEXT,
+			ocr_language TEXT NOT NULL DEFAULT 'eng',
+			ocr_optimize INTEGER NOT NULL DEFAULT 3
 		);
 		CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, queue_order);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize job database: %w", err)
+	}
+	if err := ensureOCRJobColumns(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate OCR job settings: %w", err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
@@ -86,28 +101,73 @@ func OpenJobStore(path string) (*JobStore, error) {
 	return &JobStore{db: db}, nil
 }
 
+func ensureOCRJobColumns(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(jobs)`)
+	if err != nil {
+		return fmt.Errorf("inspect jobs table: %w", err)
+	}
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var index, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&index, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("read jobs table columns: %w", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read jobs table columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close jobs table columns: %w", err)
+	}
+	if !columns["ocr_language"] {
+		if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN ocr_language TEXT NOT NULL DEFAULT 'eng'`); err != nil {
+			return fmt.Errorf("add OCR language column: %w", err)
+		}
+	}
+	if !columns["ocr_optimize"] {
+		if _, err := db.Exec(`ALTER TABLE jobs ADD COLUMN ocr_optimize INTEGER NOT NULL DEFAULT 3`); err != nil {
+			return fmt.Errorf("add OCR optimization column: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *JobStore) Close() error { return s.db.Close() }
 
-func (s *JobStore) Create(input, output, inputHost, outputHost string) (Job, error) {
+func (s *JobStore) Create(input, output, inputHost, outputHost string, options ...OCROptions) (Job, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, err
 	}
-	return s.CreateWithID(id, input, output, inputHost, outputHost)
+	return s.CreateWithID(id, input, output, inputHost, outputHost, options...)
 }
 
-func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string) (Job, error) {
+func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string, options ...OCROptions) (Job, error) {
+	ocrOptions := defaultOCROptions(options)
 	created := time.Now().UTC()
-	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at)
-		VALUES(?, 'queued', ?, ?, ?, ?, ?)`,
-		id, input, output, inputHost, outputHost, formatDBTime(created))
+	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,ocr_language,ocr_optimize)
+		VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+		id, input, output, inputHost, outputHost, formatDBTime(created), ocrOptions.Language, ocrOptions.Optimize)
 	if err != nil {
 		return Job{}, fmt.Errorf("persist queued job: %w", err)
 	}
 	return Job{
 		ID: id, Status: "queued", InputPath: input, OutputPath: output,
 		CreatedAt: created, StatusURL: statusURL(id), InputHost: inputHost, OutputHost: outputHost,
+		OCRLanguage: ocrOptions.Language, OCROptimize: ocrOptions.Optimize,
 	}, nil
+}
+
+func defaultOCROptions(options []OCROptions) OCROptions {
+	if len(options) == 0 {
+		return OCROptions{Language: "eng", Optimize: 3}
+	}
+	return options[0]
 }
 
 func (s *JobStore) Get(id string) (Job, error) {
@@ -117,9 +177,11 @@ func (s *JobStore) Get(id string) (Job, error) {
 	var exitCode sql.NullInt64
 	var errorCode, errorMessage, containerID, containerLogs sql.NullString
 	err := s.db.QueryRow(`SELECT id,status,input_path,output_path,input_host,output_host,created_at,
-		started_at,completed_at,exit_code,error_code,error_message,container_id,container_logs FROM jobs WHERE id=?`, id).
+		started_at,completed_at,exit_code,error_code,error_message,container_id,container_logs,ocr_language,ocr_optimize
+		FROM jobs WHERE id=?`, id).
 		Scan(&job.ID, &job.Status, &job.InputPath, &job.OutputPath, &job.InputHost, &job.OutputHost,
-			&created, &started, &completed, &exitCode, &errorCode, &errorMessage, &containerID, &containerLogs)
+			&created, &started, &completed, &exitCode, &errorCode, &errorMessage, &containerID, &containerLogs,
+			&job.OCRLanguage, &job.OCROptimize)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, sql.ErrNoRows
 	}
@@ -150,6 +212,38 @@ func (s *JobStore) Get(id string) (Job, error) {
 	}
 	job.StatusURL = statusURL(job.ID)
 	return job, nil
+}
+
+func (s *JobStore) List() ([]Job, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs ORDER BY queue_order`)
+	if err != nil {
+		return nil, fmt.Errorf("list OCR jobs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read OCR job ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read OCR jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close OCR job list: %w", err)
+	}
+	jobs := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
 }
 
 func (s *JobStore) ClaimNext() (Job, error) {
@@ -187,31 +281,130 @@ func (s *JobStore) SetRunning(id, containerID string) error {
 	return requireOneRow(result, err, "mark job running")
 }
 
+func (s *JobStore) RequestCancel(id string) (Job, error) {
+	now := formatDBTime(time.Now().UTC())
+	result, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled by request.'
+		WHERE id=? AND status='queued'`, now, id)
+	if err != nil {
+		return Job{}, fmt.Errorf("cancel queued job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Job{}, err
+	}
+	if changed == 0 {
+		_, err = s.db.Exec(`UPDATE jobs SET status='cancelling'
+			WHERE id=? AND status IN ('starting','running')`, id)
+		if err != nil {
+			return Job{}, fmt.Errorf("request running job cancellation: %w", err)
+		}
+	}
+	return s.Get(id)
+}
+
+func (s *JobStore) Resume(id string) (Job, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Job{}, fmt.Errorf("begin job resume: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE jobs SET status='queued',queue_order=(SELECT COALESCE(MAX(queue_order),0)+1 FROM jobs),
+		started_at=NULL,completed_at=NULL,exit_code=NULL,error_code=NULL,error_message=NULL,
+		container_id=NULL,container_logs=NULL
+		WHERE id=? AND status IN ('failed','cancelled')`, id)
+	if err != nil {
+		return Job{}, fmt.Errorf("requeue terminal job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Job{}, fmt.Errorf("inspect requeued job: %w", err)
+	}
+	if changed == 0 {
+		var exists int
+		if err := tx.QueryRow(`SELECT 1 FROM jobs WHERE id=?`, id).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return Job{}, sql.ErrNoRows
+			}
+			return Job{}, fmt.Errorf("check job before resume: %w", err)
+		}
+		return Job{}, ErrJobNotResumable
+	}
+	if _, err := tx.Exec(`UPDATE sqlite_sequence SET seq=MAX(seq,(SELECT COALESCE(MAX(queue_order),0) FROM jobs))
+		WHERE name='jobs'`); err != nil {
+		return Job{}, fmt.Errorf("update job queue sequence: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, fmt.Errorf("commit job resume: %w", err)
+	}
+	return s.Get(id)
+}
+
 func (s *JobStore) SetLogs(id string, logs []byte) error {
 	result, err := s.db.Exec(`UPDATE jobs SET container_logs=? WHERE id=?`, string(logs), id)
 	return requireOneRow(result, err, "persist OCR container logs")
 }
 
+func (s *JobStore) DeleteTerminal(id string) error {
+	result, err := s.db.Exec(`DELETE FROM jobs WHERE id=? AND status IN ('succeeded','failed','cancelled')`, id)
+	if err != nil {
+		return fmt.Errorf("delete terminal job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect deleted terminal job: %w", err)
+	}
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *JobStore) Finish(id string, exitCode int, runErr error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin job completion: %w", err)
+	}
+	defer tx.Rollback()
 	now := formatDBTime(time.Now().UTC())
+	result, err := tx.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled by request.'
+		WHERE id=? AND status='cancelling'`, now, id)
+	if err != nil {
+		return fmt.Errorf("persist cancelled job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 1 {
+		return tx.Commit()
+	}
 	if runErr != nil {
-		result, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=NULL,
-			error_code='OCR_EXECUTION_FAILED',error_message=? WHERE id=?`,
+		result, err = tx.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=NULL,
+			error_code='OCR_EXECUTION_FAILED',error_message=? WHERE id=? AND status IN ('starting','running')`,
 			now, "The OCR container could not be started or monitored.", id)
-		return requireOneRow(result, err, "persist failed job")
+	} else if exitCode == 0 {
+		result, err = tx.Exec(`UPDATE jobs SET status='succeeded',completed_at=?,exit_code=0
+			WHERE id=? AND status IN ('starting','running')`, now, id)
+	} else {
+		message := "The OCR container exited unsuccessfully."
+		result, err = tx.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=?,error_code='OCR_EXECUTION_FAILED',
+			error_message=? WHERE id=? AND status IN ('starting','running')`, now, exitCode, message, id)
 	}
-	if exitCode == 0 {
-		result, err := s.db.Exec(`UPDATE jobs SET status='succeeded',completed_at=?,exit_code=0 WHERE id=?`, now, id)
-		return requireOneRow(result, err, "persist succeeded job")
+	if err := requireOneRow(result, err, "persist job outcome"); err != nil {
+		return err
 	}
-	message := "The OCR container exited unsuccessfully."
-	result, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,exit_code=?,error_code='OCR_EXECUTION_FAILED',
-		error_message=? WHERE id=?`, now, exitCode, message, id)
-	return requireOneRow(result, err, "persist failed job")
+	return tx.Commit()
 }
 
 func (s *JobStore) RecoverInterrupted() error {
 	now := formatDBTime(time.Now().UTC())
+	if _, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
+		error_code='JOB_CANCELLED',error_message='The job was cancelled before the API host restarted.',container_id=NULL
+		WHERE status='cancelling'`, now); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,error_code='OCR_EXECUTION_FAILED',
 		error_message='The API host restarted before completion could be confirmed.',container_id=NULL
 		WHERE status IN ('starting','running')`, now)
@@ -220,7 +413,7 @@ func (s *JobStore) RecoverInterrupted() error {
 
 func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
 	rows, err := s.db.Query(`SELECT container_id FROM jobs
-		WHERE status IN ('starting','running') AND container_id IS NOT NULL`)
+		WHERE status IN ('starting','running','cancelling') AND container_id IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -237,16 +430,19 @@ func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
 }
 
 type JobService struct {
-	store    *JobStore
-	executor Executor
-	workers  int
-	logger   *slog.Logger
-	wake     chan struct{}
-	stop     chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopOnce sync.Once
+	store       *JobStore
+	executor    Executor
+	workers     int
+	logger      *slog.Logger
+	wake        chan struct{}
+	stop        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	stopOnce    sync.Once
+	activeMu    sync.Mutex
+	active      map[string]context.CancelFunc
+	maintenance sync.RWMutex
 }
 
 func NewJobService(store *JobStore, executor Executor, workers int, logger *slog.Logger) *JobService {
@@ -254,6 +450,7 @@ func NewJobService(store *JobStore, executor Executor, workers int, logger *slog
 	return &JobService{
 		store: store, executor: executor, workers: workers, logger: logger,
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), ctx: ctx, cancel: cancel,
+		active: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -281,8 +478,10 @@ func (s *JobService) Shutdown(ctx context.Context) {
 	}
 }
 
-func (s *JobService) Submit(input, output, inputHost, outputHost string) (Job, error) {
-	job, err := s.store.Create(input, output, inputHost, outputHost)
+func (s *JobService) Submit(input, output, inputHost, outputHost string, options ...OCROptions) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
+	job, err := s.store.Create(input, output, inputHost, outputHost, options...)
 	if err != nil {
 		return Job{}, err
 	}
@@ -290,8 +489,10 @@ func (s *JobService) Submit(input, output, inputHost, outputHost string) (Job, e
 	return job, nil
 }
 
-func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost string) (Job, error) {
-	job, err := s.store.CreateWithID(id, input, output, inputHost, outputHost)
+func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost string, options ...OCROptions) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
+	job, err := s.store.CreateWithID(id, input, output, inputHost, outputHost, options...)
 	if err != nil {
 		return Job{}, err
 	}
@@ -300,6 +501,39 @@ func (s *JobService) SubmitWithID(id, input, output, inputHost, outputHost strin
 }
 
 func (s *JobService) Get(id string) (Job, error) { return s.store.Get(id) }
+
+func (s *JobService) LockMaintenance() func() {
+	s.maintenance.Lock()
+	return s.maintenance.Unlock
+}
+
+func (s *JobService) Cancel(id string) (Job, error) {
+	job, err := s.store.RequestCancel(id)
+	if err != nil {
+		return Job{}, err
+	}
+	switch job.Status {
+	case "cancelling":
+		s.activeMu.Lock()
+		cancel := s.active[id]
+		s.activeMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+	return job, nil
+}
+
+func (s *JobService) Resume(id string) (Job, error) {
+	s.maintenance.RLock()
+	defer s.maintenance.RUnlock()
+	job, err := s.store.Resume(id)
+	if err != nil {
+		return Job{}, err
+	}
+	s.signal()
+	return job, nil
+}
 
 func (s *JobService) signal() {
 	select {
@@ -318,7 +552,9 @@ func (s *JobService) worker() {
 			return
 		default:
 		}
+		s.maintenance.RLock()
 		job, err := s.store.ClaimNext()
+		s.maintenance.RUnlock()
 		if err == nil {
 			s.execute(job)
 			continue
@@ -339,11 +575,39 @@ func (s *JobService) worker() {
 }
 
 func (s *JobService) execute(job Job) {
-	exitCode, runErr := s.executor.Run(s.ctx, job,
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.activeMu.Lock()
+	s.active[job.ID] = cancel
+	s.activeMu.Unlock()
+	defer func() {
+		s.activeMu.Lock()
+		delete(s.active, job.ID)
+		s.activeMu.Unlock()
+		cancel()
+	}()
+	current, err := s.store.Get(job.ID)
+	if err != nil {
+		s.logger.Error("unable to read OCR job before execution", "job_id", job.ID, "error", err)
+		return
+	}
+	if current.Status == "cancelling" {
+		cancel()
+	}
+	exitCode, runErr := s.executor.Run(ctx, job,
 		func(containerID string) error { return s.store.SetRunning(job.ID, containerID) },
 		func(logs []byte) error { return s.store.SetLogs(job.ID, logs) })
 	if err := s.store.Finish(job.ID, exitCode, runErr); err != nil {
 		s.logger.Error("unable to persist OCR job outcome", "job_id", job.ID, "error", err)
+		return
+	}
+	finished, err := s.store.Get(job.ID)
+	if err != nil {
+		s.logger.Error("unable to read final OCR job outcome", "job_id", job.ID, "error", err)
+		return
+	}
+	if finished.Status == "cancelled" {
+		s.logger.Info("OCR job cancelled", "job_id", job.ID)
+		return
 	}
 	if runErr != nil {
 		s.logger.Warn("OCR job execution failed", "job_id", job.ID, "failure", "executor_error")

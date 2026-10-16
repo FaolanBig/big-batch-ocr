@@ -24,6 +24,10 @@ type ValidatedPaths struct {
 }
 
 func ValidatePaths(dataRoot, dockerDataRoot, input, output string, createDestination bool) (ValidatedPaths, error) {
+	return validatePaths(dataRoot, dockerDataRoot, input, output, createDestination, false)
+}
+
+func validatePaths(dataRoot, dockerDataRoot, input, output string, createDestination, allowPrivate bool) (ValidatedPaths, error) {
 	root, err := filepath.EvalSymlinks(dataRoot)
 	if err != nil {
 		return ValidatedPaths{}, fmt.Errorf("%w: data root is unavailable", ErrInvalidPath)
@@ -33,11 +37,11 @@ func ValidatePaths(dataRoot, dockerDataRoot, input, output string, createDestina
 		return ValidatedPaths{}, fmt.Errorf("%w: data root is unavailable", ErrInvalidPath)
 	}
 	defer data.Close()
-	inputHost, err := resolveInput(data, root, input)
+	inputHost, err := resolveInput(data, root, input, allowPrivate)
 	if err != nil {
 		return ValidatedPaths{}, err
 	}
-	outputHost, err := resolveOutput(data, root, output, createDestination, inputHost)
+	outputHost, err := resolveOutput(data, root, output, createDestination, inputHost, allowPrivate)
 	if err != nil {
 		return ValidatedPaths{}, err
 	}
@@ -60,8 +64,8 @@ func ValidatePaths(dataRoot, dockerDataRoot, input, output string, createDestina
 	}, nil
 }
 
-func resolveInput(data *os.Root, root, requestPath string) (string, error) {
-	relative, err := safeRelativePath(root, requestPath)
+func resolveInput(data *os.Root, root, requestPath string, allowPrivate bool) (string, error) {
+	relative, err := safeRelativePath(root, requestPath, allowPrivate)
 	if err != nil {
 		return "", err
 	}
@@ -78,6 +82,9 @@ func resolveInput(data *os.Root, root, requestPath string) (string, error) {
 		return "", fmt.Errorf("%w: input path could not be resolved", ErrInvalidPath)
 	}
 	resolvedRelative = filepath.ToSlash(resolvedRelative)
+	if !allowPrivate && isPrivatePath(resolvedRelative) {
+		return "", fmt.Errorf("%w: input path is reserved for API host data", ErrInvalidPath)
+	}
 	info, err := data.Stat(resolvedRelative)
 	if err != nil || !info.IsDir() {
 		return "", fmt.Errorf("%w: input must be a directory", ErrInvalidPath)
@@ -96,8 +103,8 @@ func resolveInput(data *os.Root, root, requestPath string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHost string) (string, error) {
-	relative, err := safeRelativePath(root, requestPath)
+func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHost string, allowPrivate bool) (string, error) {
+	relative, err := safeRelativePath(root, requestPath, allowPrivate)
 	if err != nil {
 		return "", err
 	}
@@ -110,6 +117,9 @@ func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHo
 		resolvedRelative, relErr := filepath.Rel(root, resolved)
 		if relErr != nil {
 			return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
+		}
+		if !allowPrivate && isPrivatePath(filepath.ToSlash(resolvedRelative)) {
+			return "", fmt.Errorf("%w: destination is reserved for API host data", ErrInvalidPath)
 		}
 		info, statErr := data.Stat(filepath.ToSlash(resolvedRelative))
 		if statErr != nil {
@@ -151,6 +161,13 @@ func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHo
 		return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
 	}
 	prospective := filepath.Join(resolvedParent, missingSuffix)
+	prospectiveRelative, err := filepath.Rel(root, prospective)
+	if err != nil {
+		return "", fmt.Errorf("%w: destination path could not be resolved", ErrInvalidPath)
+	}
+	if !allowPrivate && isPrivatePath(filepath.ToSlash(prospectiveRelative)) {
+		return "", fmt.Errorf("%w: destination is reserved for API host data", ErrInvalidPath)
+	}
 	if prospective == inputHost || within(inputHost, prospective) || within(prospective, inputHost) {
 		return "", ErrPathConflict
 	}
@@ -169,7 +186,11 @@ func resolveOutput(data *os.Root, root, requestPath string, create bool, inputHo
 	return filepath.Clean(prospective), nil
 }
 
-func safeRelativePath(root, requestPath string) (string, error) {
+func isPrivatePath(relative string) bool {
+	return relative == ".api-host" || strings.HasPrefix(relative, ".api-host/")
+}
+
+func safeRelativePath(root, requestPath string, allowPrivate bool) (string, error) {
 	if strings.TrimSpace(requestPath) == "" || filepath.IsAbs(requestPath) {
 		return "", fmt.Errorf("%w: paths must be non-empty and relative", ErrInvalidPath)
 	}
@@ -181,6 +202,9 @@ func safeRelativePath(root, requestPath string) (string, error) {
 	if !fs.ValidPath(relative) {
 		return "", fmt.Errorf("%w: path must stay beneath the data root", ErrInvalidPath)
 	}
+	if !allowPrivate && isPrivatePath(relative) {
+		return "", fmt.Errorf("%w: path is reserved for API host data", ErrInvalidPath)
+	}
 	candidate := filepath.Join(root, clean)
 	if !within(root, candidate) {
 		return "", fmt.Errorf("%w: path must stay beneath the data root", ErrInvalidPath)
@@ -188,8 +212,8 @@ func safeRelativePath(root, requestPath string) (string, error) {
 	return relative, nil
 }
 
-func resolveRelative(root, requestPath string) (string, error) {
-	relative, err := safeRelativePath(root, requestPath)
+func resolveRelative(root, requestPath string, allowPrivate bool) (string, error) {
+	relative, err := safeRelativePath(root, requestPath, allowPrivate)
 	if err != nil {
 		return "", err
 	}

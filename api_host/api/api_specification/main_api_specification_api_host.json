@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be selected from a shared directory or uploaded as a tar.gz archive; successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, or host paths. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -35,7 +35,7 @@
         ],
         "operationId": "submitOcrJob",
         "summary": "Submit an OCR job",
-        "description": "Submits an OCR job in the requested mode. Synchronous mode waits for the container to finish and returns the terminal result. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
+        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. Synchronous mode waits for the container to finish and returns the terminal result. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
         "requestBody": {
           "required": true,
           "content": {
@@ -57,7 +57,9 @@
                   "value": {
                     "inputPath": "incoming/invoices",
                     "outputPath": "processed/invoices",
-                    "mode": "asynchronous"
+                    "mode": "asynchronous",
+                    "language": "deu+eng",
+                    "optimize": 2
                   }
                 },
                 "createMissingDestination": {
@@ -146,6 +148,16 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "description": "Directory-based submissions are disabled by configuration. Upload an inputArchive instead.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "409": {
             "$ref": "#/components/responses/PathConflict"
           },
@@ -188,6 +200,68 @@
                   "jobId": "job_01J9M7X2K6",
                   "jobStatus": "running",
                   "statusUrl": "/api/v1/jobs/job_01J9M7X2K6"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/cleanup": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "cleanupOcrJobData",
+        "summary": "Clean up terminal job data",
+        "description": "Cleans up only succeeded, failed, or cancelled jobs. Active jobs are ignored and reported in `activeJobsSkipped`. Scope `uploads` deletes metadata and private workspaces for jobs submitted with uploaded archives. Scope `all` also deletes each terminal shared-directory job's whole input and output directories, except paths shared with active jobs or containing API host database files. Unsafe or unresolvable terminal paths are preserved and reported in `jobsSkippedForUnsafePaths`. Shared-directory cleanup is destructive and permanent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupJobDataRequest"
+              },
+              "examples": {
+                "uploads": {
+                  "summary": "Remove uploaded-archive job data only",
+                  "value": {
+                    "scope": "uploads"
+                  }
+                },
+                "all": {
+                  "summary": "Remove all terminal job data, including shared directories",
+                  "value": {
+                    "scope": "all"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cleanup completed. Active jobs and terminal jobs whose paths are needed by active jobs are ignored, not treated as errors. Unsafe or unresolvable terminal paths are preserved and reported in the result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupJobDataResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "description": "A data path could not be safely resolved or removed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -291,6 +365,188 @@
             "$ref": "#/components/responses/JobNotFound"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "deleteOcrJob",
+        "summary": "Delete a terminal OCR job",
+        "description": "Deletes the persisted job record, including its stored container logs and outcome metadata. For jobs submitted with an uploaded archive, also removes the private input/output workspace. Jobs must already be terminal; cancel queued or running jobs first and wait for cancellation to finish. Caller-provided shared input and output directories are never deleted.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The terminal job record and any uploaded-job workspace were deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job is queued, starting, running, or cancelling. Cancel it and wait until it reaches a terminal state before deletion.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The job record or uploaded-job workspace could not be deleted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobId}/cancel": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "cancelOcrJob",
+        "summary": "Cancel an OCR job",
+        "description": "Cancels a queued job immediately. For a starting or running job, requests cancellation of its managed OCR container and returns while the container is being stopped. Poll the job status URL until the terminal `cancelled` state is recorded. Cancellation does not delete job data; use the job DELETE or cleanup endpoint to remove it.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A queued job was cancelled immediately, or the job was already cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Cancellation was requested for a starting or running job; the managed container is being stopped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job already succeeded or failed and cannot be cancelled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The cancellation request could not be persisted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobId}/resume": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "operationId": "resumeOcrJob",
+        "summary": "Resume a failed or cancelled OCR job",
+        "description": "Requeues the existing job using its current job ID, stored input and output paths, and OCR settings. The previous attempt's start/completion timestamps, exit code, error, container ID, and logs are cleared. Resumed jobs are added to the end of the queue. Only jobs with status `failed` or `cancelled` can be resumed.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The job was accepted for retry.",
+            "headers": {
+              "Location": {
+                "description": "URL for polling the resumed job's status.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                },
+                "example": "/api/v1/jobs/job_01J9M7X2K6"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAcknowledgement"
+                },
+                "example": {
+                  "jobId": "job_01J9M7X2K6",
+                  "status": "queued",
+                  "statusUrl": "/api/v1/jobs/job_01J9M7X2K6"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/JobNotFound"
+          },
+          "409": {
+            "description": "The job exists but is not failed or cancelled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Job cannot be resumed",
+                  "status": 409,
+                  "code": "JOB_NOT_RESUMABLE",
+                  "detail": "Only failed or cancelled jobs can be resumed."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The resume request could not be persisted.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/jobs/{jobId}/result": {
@@ -300,7 +556,7 @@
         ],
         "operationId": "downloadOcrJobResult",
         "summary": "Download processed files",
-        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; the job's output directory remains on the configured shared data volume.",
+        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; downloading does not remove job data and results may be downloaded repeatedly. Use the job DELETE or cleanup endpoint to explicitly remove uploaded-job workspaces.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -337,7 +593,7 @@
             "$ref": "#/components/responses/JobNotCompleted"
           },
           "410": {
-            "description": "An uploaded job result was already downloaded and its private workspace has been removed.",
+            "description": "The uploaded job's private workspace is no longer available, for example because it was removed outside the API.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -345,10 +601,10 @@
                 },
                 "example": {
                   "type": "about:blank",
-                  "title": "Job result already downloaded",
+                  "title": "Job result unavailable",
                   "status": 410,
-                  "code": "JOB_RESULT_CONSUMED",
-                  "detail": "The uploaded job workspace was removed after its result was downloaded."
+                  "code": "JOB_RESULT_UNAVAILABLE",
+                  "detail": "The uploaded job workspace is no longer present on the data volume."
                 }
               }
             }
@@ -416,6 +672,68 @@
       }
     },
     "schemas": {
+      "CleanupJobDataRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "uploads",
+              "all"
+            ],
+            "description": "`uploads` removes uploaded-archive workspaces and metadata only. `all` also removes whole shared input/output directories for terminal jobs."
+          }
+        }
+      },
+      "CleanupJobDataResult": {
+        "type": "object",
+        "required": [
+          "scope",
+          "jobsDeleted",
+          "activeJobsSkipped",
+          "jobsSkippedForActiveData",
+          "jobsSkippedForServerData",
+          "jobsSkippedForUnsafePaths"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "uploads",
+              "all"
+            ]
+          },
+          "jobsDeleted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal job records deleted."
+          },
+          "activeJobsSkipped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of queued, starting, running, or cancelling jobs left untouched."
+          },
+          "jobsSkippedForActiveData": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal jobs whose shared directories overlap paths referenced by active jobs."
+          },
+          "jobsSkippedForServerData": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal jobs skipped because their directory contains the API host database."
+          },
+          "jobsSkippedForUnsafePaths": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of terminal jobs preserved because one or more recorded directories no longer resolve safely."
+          }
+        }
+      },
       "SubmitJobRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -428,7 +746,7 @@
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Input directory relative to the configured data root. It must resolve to an existing, readable directory."
+            "description": "Input directory relative to the configured data root. It must resolve to an existing, readable directory and is accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "outputPath": {
             "type": "string",
@@ -447,22 +765,34 @@
             "type": "boolean",
             "default": false,
             "description": "When true, the host may create the missing destination directory, and any missing parent directories, only beneath the configured data root. When omitted or false, a missing destination is rejected."
+          },
+          "language": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(\\+[A-Za-z0-9_]+)*$",
+            "maxLength": 128,
+            "description": "Optional OCRmyPDF language code or '+'-separated codes, such as 'eng' or 'deu+eng'. Defaults to the API host's OCR_LANGUAGE."
+          },
+          "optimize": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "Optional OCRmyPDF optimization level. Defaults to the API host's OCR_OPTIMIZE."
           }
         }
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the existing shared-directory workflow or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is removed after a successful result download. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true) or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive."
+            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive and accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "inputArchive": {
             "type": "string",
             "format": "binary",
-            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job output directory."
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job input/output workspace that remains until explicitly removed with the job DELETE or cleanup endpoint."
           },
           "outputPath": {
             "type": "string",
@@ -478,6 +808,18 @@
           "createDestination": {
             "type": "boolean",
             "default": false
+          },
+          "language": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]+(\\+[A-Za-z0-9_]+)*$",
+            "maxLength": 128,
+            "description": "Optional OCRmyPDF language code or '+'-separated codes, such as 'eng' or 'deu+eng'. Defaults to OCR_LANGUAGE."
+          },
+          "optimize": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "Optional OCRmyPDF optimization level. Defaults to OCR_OPTIMIZE."
           }
         },
         "required": [
@@ -545,10 +887,12 @@
           "queued",
           "starting",
           "running",
+          "cancelling",
           "succeeded",
-          "failed"
+          "failed",
+          "cancelled"
         ],
-        "description": "`succeeded` indicates successful completion; `failed` indicates execution did not complete successfully."
+        "description": "`succeeded`, `failed`, and `cancelled` are terminal states. `cancelling` means a running job's managed container is being stopped."
       },
       "JobStatus": {
         "type": "object",
@@ -801,7 +1145,7 @@
     },
     "responses": {
       "BadRequest": {
-        "description": "Malformed JSON or invalid request shape.",
+        "description": "Malformed JSON, invalid request shape, or OCR options that do not satisfy the documented language and optimization constraints.",
         "content": {
           "application/problem+json": {
             "schema": {

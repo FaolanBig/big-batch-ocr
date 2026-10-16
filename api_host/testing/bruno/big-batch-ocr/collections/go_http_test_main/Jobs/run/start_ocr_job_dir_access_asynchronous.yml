@@ -1,7 +1,7 @@
 info:
-  name: start_ocr_job_file_upload
+  name: start_ocr_job_dir_access_asynchronous
   type: http
-  seq: 3
+  seq: 2
 
 http:
   method: POST
@@ -9,11 +9,12 @@ http:
   body:
     type: multipart-form
     data:
-      - name: inputArchive
-        type: file
-        value:
-          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\compressed_pdfs.tar.gz
-        contentType: application/gzip
+      - name: inputPath
+        type: text
+        value: incoming/sample
+      - name: outputPath
+        type: text
+        value: processed/sample
       - name: mode
         type: text
         value: asynchronous

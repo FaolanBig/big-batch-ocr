@@ -54,11 +54,21 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 		}
 	}
 
+	ocrOptions := OCROptions{Language: job.OCRLanguage, Optimize: job.OCROptimize}
+	if ocrOptions.Language == "" {
+		ocrOptions = defaultOCROptions(nil)
+	}
 	containerName := "api-host-" + job.ID
 	response, err := e.client.ContainerCreate(ctx,
 		&container.Config{
 			Image: e.image,
-			Env:   []string{"OCR_JOBS=" + strconv.Itoa(e.jobs)},
+			User:  "65532:65532",
+			Env: []string{
+				"OCR_JOBS=" + strconv.Itoa(e.jobs),
+				"OCR_LANGUAGE=" + ocrOptions.Language,
+				"OCR_OPTIMIZE=" + strconv.Itoa(ocrOptions.Optimize),
+				"HOME=/tmp",
+			},
 			Labels: map[string]string{
 				"com.faolanbig.big-batch-ocr.managed": "true",
 				"com.faolanbig.big-batch-ocr.job-id":  job.ID,
@@ -92,6 +102,16 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 		return 1, errors.Join(fmt.Errorf("persist running OCR job: %w", err), stopAndRemove)
 	}
 	waitCh, errCh := e.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	cancelContainer := func() error {
+		logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		e.captureLogs(logCtx, job.ID, containerID, saveLogs)
+		cancel()
+		if err := e.stopAndRemove(containerID); err != nil {
+			e.logger.Warn("could not stop cancelled OCR container", "job_id", job.ID, "error_type", fmt.Sprintf("%T", err))
+			return errors.Join(ctx.Err(), err)
+		}
+		return ctx.Err()
+	}
 	var exitCode int64
 	select {
 	case result, ok := <-waitCh:
@@ -107,6 +127,9 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 			return 1, fmt.Errorf("OCR container wait failed: %s", result.Error.Message)
 		}
 	case err, ok := <-errCh:
+		if ctx.Err() != nil {
+			return 1, cancelContainer()
+		}
 		e.captureLogs(ctx, job.ID, containerID, saveLogs)
 		cleanup()
 		if !ok || err == nil {
@@ -114,18 +137,7 @@ func (e *DockerExecutor) Run(ctx context.Context, job Job, markRunning func(stri
 		}
 		return 1, fmt.Errorf("wait for OCR container: %w", err)
 	case <-ctx.Done():
-		e.captureLogs(context.Background(), job.ID, containerID, saveLogs)
-		if err := e.stopAndRemove(containerID); err != nil {
-			e.logger.Warn("could not stop cancelled OCR container", "job_id", job.ID, "error_type", fmt.Sprintf("%T", err))
-		}
-		go func() {
-			select {
-			case <-waitCh:
-			case <-errCh:
-			case <-time.After(5 * time.Second):
-			}
-		}()
-		return 1, ctx.Err()
+		return 1, cancelContainer()
 	}
 	e.captureLogs(ctx, job.ID, containerID, saveLogs)
 	cleanup()

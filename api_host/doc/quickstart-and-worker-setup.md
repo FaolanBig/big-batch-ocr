@@ -19,6 +19,9 @@ resource use: as a first estimate, plan for up to
 `MAX_CONCURRENT_JOBS * OCR_JOBS` OCR threads, plus memory and CPU used by
 scanning and processing individual documents. Start with one concurrent job
 and three OCR threads, monitor the host, and adjust deliberately.
+The API host's `OCR_LANGUAGE` and `OCR_OPTIMIZE` settings provide defaults
+(`eng` and `3`); each job may override them with validated `language` and
+`optimize` fields.
 
 Run one API-host instance against its database. Do not scale this Compose
 service to multiple replicas or run multiple API hosts against one database:
@@ -50,7 +53,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
-For example, `ghcr.io/faolanbig/big-batch-ocr:v1.0.0`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr:v1.1.0`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -63,9 +66,11 @@ Do not point it at a path that is available only inside the API container.
 When you use the configurator in step 3, it creates the selected data-root
 directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
 OCR containers. You do not need to create the root manually. To use the
-shared-directory submission method, create the input/output subdirectories
-inside that root and put source files in the input directory. This is not
-needed for archive uploads: the API creates an isolated per-job workspace.
+shared-directory submission method, enable directory-based submissions in the
+configurator, then create the input/output subdirectories inside that root and
+put source files in the input directory. Directory submissions are disabled
+by default; archive uploads need no pre-created input or output directories
+because the API creates an isolated per-job workspace.
 
 ### 3. Configure runtime credentials
 
@@ -76,9 +81,12 @@ Create the runtime environment file with the interactive configurator:
 ```
 
 The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, and worker settings, creates the data-root directory with
-permissions for the containers, then saves `api_host/env/.env` with mode
-`600`. Enter the image and data-root values selected in step 2.
+Docker data root, worker settings, and whether directory-based submissions
+should be allowed. That option defaults to disabled, so use archive uploads
+unless you explicitly opt in to directory submissions. The script creates the
+data-root directory with permissions for the containers, then saves
+`api_host/env/.env` with mode `600`. Enter the image and data-root values
+selected in step 2.
 For the shared-directory example later in this guide, create its child
 directories after configuration (replace the root if you selected a different
 one):
@@ -88,6 +96,16 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   /srv/big-batch-ocr-data/incoming/sample \
   /srv/big-batch-ocr-data/processed
 ```
+
+The API host and managed OCR containers run as UID/GID `65532`. If you later
+use `POST /api/v1/jobs/cleanup` with `{"scope":"all"}`, that user must have
+write and execute permission on each shared job directory's parent to remove
+the directory, and on directories inside it to remove their contents. For
+example, owning `incoming/sample` does not let the API delete it if
+`incoming` is owned by root and is not writable by UID/GID `65532`. See
+[`deployment.md`](deployment.md#docker-socket-and-filesystem-mapping) for a
+targeted permission-repair example. Avoid recursively changing permissions on
+the whole data root.
 
 Skip this for archive uploads; they do not require pre-created input or output
 directories.
@@ -199,7 +217,7 @@ response="$(
   curl --fail-with-body --silent --show-error \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true}' \
+    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
     http://127.0.0.1:8080/api/v1/jobs
 )"
 printf '%s\n' "$response" | jq .
@@ -254,6 +272,11 @@ job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
 status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
+The `language` and `optimize` fields are optional. `language` accepts one or
+more installed OCRmyPDF/Tesseract language codes joined by `+`; `optimize` is
+an integer from `0` to `3`. Omitted fields use the server defaults. Unknown
+OCR command arguments cannot be supplied.
+
 The archive request body is limited to 1 GiB and its extracted contents to
 10 GiB. Archive entries must be files or directories; links and paths that
 escape the archive are rejected. The existing JSON request with `inputPath`
@@ -270,11 +293,15 @@ curl --fail-with-body --silent --show-error \
   -o "result-${job_id}.tar.gz"
 ```
 
-The result is generated from the job's output directory when requested. The
-job-specific workspace, including its extracted input, is removed after the
-download succeeds. A later download attempt for that uploaded job returns
-`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
-JSON request, result downloads do not remove the shared output directory.
+The result is generated from the job's output directory when requested.
+Downloading does not remove the job-specific workspace or its extracted
+input; the result can be downloaded again later. Remove uploaded-job data
+explicitly with `DELETE /api/v1/jobs/${job_id}` after the job is terminal, or
+use `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to delete all
+terminal uploaded jobs. Cancelling a job also preserves its workspace until
+explicit cleanup. For jobs submitted with the original `inputPath` JSON
+request, result downloads do not remove the shared output directory, and
+deleting the job record does not remove shared input/output directories.
 
 ### 6. Monitor and stop the service
 
@@ -316,7 +343,7 @@ sudo docker run -d --name api-host --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/big-batch-ocr-data:/data:rw \
   -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+  big-batch-ocr-api-host:direct
 ```
 
 This configures two in-process queue workers, with each OCR container using
