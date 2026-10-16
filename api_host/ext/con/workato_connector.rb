@@ -1,0 +1,414 @@
+{
+  title: 'Big Batch OCR',
+
+  connection: {
+    fields: [
+      {
+        name: 'base_url',
+        label: 'API host URL',
+        control_type: 'url',
+        type: 'string',
+        optional: false,
+        hint: 'The origin of the API host, for example https://ocr.example.com'
+      },
+      {
+        name: 'api_key',
+        label: 'Bearer API key',
+        control_type: 'password',
+        type: 'string',
+        optional: true,
+        hint: 'Leave blank only if the API host operator enabled unauthenticated access.'
+      }
+    ],
+
+    authorization: {
+      type: 'custom_auth',
+      apply: lambda do |connection|
+        unless connection['api_key'].to_s.empty?
+          headers(Authorization: "Bearer #{connection['api_key']}")
+        end
+      end
+    }
+  },
+
+  base_uri: lambda do |connection|
+    connection['base_url'].to_s.gsub(/\/+\z/, '')
+  end,
+
+  test: lambda do |_connection|
+    get('/health')
+  end,
+
+  object_definitions: {
+    job_status: {
+      fields: lambda do
+        [
+          { name: 'jobId', type: 'string', label: 'Job ID' },
+          {
+            name: 'status',
+            type: 'string',
+            label: 'Status',
+            control_type: 'select',
+            pick_list: [
+              %w[queued queued],
+              %w[starting starting],
+              %w[running running],
+              %w[cancelling cancelling],
+              %w[succeeded succeeded],
+              %w[failed failed],
+              %w[cancelled cancelled]
+            ]
+          },
+          { name: 'inputPath', type: 'string', label: 'Input path' },
+          { name: 'outputPath', type: 'string', label: 'Output path' },
+          { name: 'createdAt', type: 'string', label: 'Created at' },
+          { name: 'startedAt', type: 'string', label: 'Started at' },
+          { name: 'completedAt', type: 'string', label: 'Completed at' },
+          { name: 'exitCode', type: 'integer', label: 'Exit code' },
+          {
+            name: 'error',
+            type: 'object',
+            properties: [
+              { name: 'code', type: 'string' },
+              { name: 'message', type: 'string' }
+            ]
+          },
+          { name: 'statusUrl', type: 'string', label: 'Status URL' }
+        ]
+      end
+    }
+  },
+
+  actions: {
+    check_health: {
+      title: 'Check API health',
+      description: 'Check whether the API host is responsive.',
+
+      execute: lambda do |_connection, _input|
+        get('/health')
+      end,
+
+      output_fields: lambda do
+        [{ name: 'status', type: 'string' }]
+      end
+    },
+
+    submit_directory_job: {
+      title: 'Submit a directory OCR job',
+      description: 'Submit an OCR job using directories under the API host data root. Directory access must be enabled by the API host operator.',
+
+      input_fields: lambda do
+        [
+          { name: 'inputPath', label: 'Input directory', type: 'string', optional: false },
+          { name: 'outputPath', label: 'Output directory', type: 'string', optional: false },
+          {
+            name: 'mode',
+            label: 'Execution mode',
+            type: 'string',
+            control_type: 'select',
+            pick_list: [%w[Asynchronous asynchronous], %w[Synchronous synchronous]],
+            default: 'asynchronous',
+            optional: false
+          },
+          {
+            name: 'createDestination',
+            label: 'Create destination if missing',
+            type: 'boolean',
+            control_type: 'checkbox',
+            default: false,
+            optional: true
+          },
+          {
+            name: 'language',
+            label: 'OCR language(s)',
+            type: 'string',
+            optional: true,
+            hint: 'Language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
+          },
+          {
+            name: 'optimize',
+            label: 'Optimization level',
+            type: 'integer',
+            control_type: 'number',
+            optional: true,
+            hint: 'A value from 0 to 3. Leave blank to use the API host default.'
+          }
+        ]
+      end,
+
+      execute: lambda do |_connection, input|
+        payload = {
+          inputPath: input['inputPath'],
+          outputPath: input['outputPath'],
+          mode: input['mode'],
+          createDestination: input['createDestination'],
+          language: input['language'],
+          optimize: input['optimize']
+        }
+        payload.delete_if { |_key, value| value.nil? }
+
+        post('/api/v1/jobs', payload).after_response do |code, body, response_headers|
+          acknowledgement = body.is_a?(Hash) ? body : {}
+          {
+            response_code: code,
+            jobId: response_headers['x-job-id'] || acknowledgement['jobId'],
+            status: acknowledgement['status'],
+            statusUrl: acknowledgement['statusUrl'],
+            resultArchive: body.is_a?(Hash) ? nil : body,
+            contentDisposition: response_headers['content-disposition']
+          }
+        end
+      end,
+
+      output_fields: lambda do
+        [
+          { name: 'response_code', type: 'integer', label: 'HTTP response code' },
+          { name: 'jobId', type: 'string', label: 'Job ID' },
+          { name: 'status', type: 'string', label: 'Job status' },
+          { name: 'statusUrl', type: 'string', label: 'Status URL' },
+          {
+            name: 'resultArchive',
+            type: 'string',
+            label: 'Result archive',
+            hint: 'Populated only for synchronous submissions; the value is the returned tar.gz response body.'
+          },
+          { name: 'contentDisposition', type: 'string', label: 'Suggested archive filename' }
+        ]
+      end
+    },
+
+    submit_archive_job: {
+      title: 'Submit an archive OCR job',
+      description: 'Upload an input tar.gz archive and submit it for OCR processing.',
+
+      input_fields: lambda do
+        [
+          {
+            name: 'inputArchive',
+            label: 'Input tar.gz archive',
+            type: 'string',
+            control_type: 'file',
+            optional: false
+          },
+          {
+            name: 'mode',
+            label: 'Execution mode',
+            type: 'string',
+            control_type: 'select',
+            pick_list: [%w[Asynchronous asynchronous], %w[Synchronous synchronous]],
+            default: 'asynchronous',
+            optional: false
+          },
+          { name: 'outputPath', label: 'Output directory', type: 'string', optional: true },
+          {
+            name: 'createDestination',
+            label: 'Create destination if missing',
+            type: 'boolean',
+            control_type: 'checkbox',
+            default: false,
+            optional: true
+          },
+          {
+            name: 'language',
+            label: 'OCR language(s)',
+            type: 'string',
+            optional: true,
+            hint: 'Language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
+          },
+          {
+            name: 'optimize',
+            label: 'Optimization level',
+            type: 'integer',
+            control_type: 'number',
+            optional: true,
+            hint: 'A value from 0 to 3. Leave blank to use the API host default.'
+          }
+        ]
+      end,
+
+      execute: lambda do |_connection, input|
+        payload = {
+          inputArchive: input['inputArchive'],
+          mode: input['mode'],
+          outputPath: input['outputPath'],
+          createDestination: input['createDestination'],
+          language: input['language'],
+          optimize: input['optimize']
+        }
+        payload.delete_if { |_key, value| value.nil? }
+
+        post('/api/v1/jobs', payload)
+          .request_format_multipart_form_data
+          .after_response do |code, body, response_headers|
+            acknowledgement = body.is_a?(Hash) ? body : {}
+            {
+              response_code: code,
+              jobId: response_headers['x-job-id'] || acknowledgement['jobId'],
+              status: acknowledgement['status'],
+              statusUrl: acknowledgement['statusUrl'],
+              resultArchive: body.is_a?(Hash) ? nil : body,
+              contentDisposition: response_headers['content-disposition']
+            }
+          end
+      end,
+
+      output_fields: lambda do
+        [
+          { name: 'response_code', type: 'integer', label: 'HTTP response code' },
+          { name: 'jobId', type: 'string', label: 'Job ID' },
+          { name: 'status', type: 'string', label: 'Job status' },
+          { name: 'statusUrl', type: 'string', label: 'Status URL' },
+          {
+            name: 'resultArchive',
+            type: 'string',
+            label: 'Result archive',
+            hint: 'Populated only for synchronous submissions; the value is the returned tar.gz response body.'
+          },
+          { name: 'contentDisposition', type: 'string', label: 'Suggested archive filename' }
+        ]
+      end
+    },
+
+    get_job: {
+      title: 'Get job status',
+      description: 'Retrieve the current state and outcome of an OCR job.',
+
+      input_fields: lambda do
+        [{ name: 'jobId', label: 'Job ID', type: 'string', optional: false }]
+      end,
+
+      execute: lambda do |_connection, input|
+        get("/api/v1/jobs/#{input['jobId']}")
+      end,
+
+      output_fields: lambda do |object_definitions|
+        object_definitions['job_status']
+      end
+    },
+
+    cancel_job: {
+      title: 'Cancel an OCR job',
+      description: 'Cancel a queued job or request cancellation of a running job. Poll the job until it reaches the cancelled state.',
+
+      input_fields: lambda do
+        [{ name: 'jobId', label: 'Job ID', type: 'string', optional: false }]
+      end,
+
+      execute: lambda do |_connection, input|
+        post("/api/v1/jobs/#{input['jobId']}/cancel")
+      end,
+
+      output_fields: lambda do |object_definitions|
+        object_definitions['job_status']
+      end
+    },
+
+    resume_job: {
+      title: 'Resume a failed or cancelled job',
+      description: 'Requeue an existing failed or cancelled job using its saved input and OCR settings.',
+
+      input_fields: lambda do
+        [{ name: 'jobId', label: 'Job ID', type: 'string', optional: false }]
+      end,
+
+      execute: lambda do |_connection, input|
+        post("/api/v1/jobs/#{input['jobId']}/resume")
+      end,
+
+      output_fields: lambda do
+        [
+          { name: 'jobId', type: 'string', label: 'Job ID' },
+          { name: 'status', type: 'string', label: 'Job status' },
+          { name: 'statusUrl', type: 'string', label: 'Status URL' }
+        ]
+      end
+    },
+
+    download_result: {
+      title: 'Download processed files',
+      description: "Download a succeeded job's output as a tar.gz archive.",
+
+      input_fields: lambda do
+        [{ name: 'jobId', label: 'Job ID', type: 'string', optional: false }]
+      end,
+
+      execute: lambda do |_connection, input|
+        get("/api/v1/jobs/#{input['jobId']}/result")
+          .response_format_raw
+          .after_response do |_code, body, response_headers|
+            {
+              jobId: response_headers['x-job-id'],
+              fileName: response_headers['content-disposition'],
+              archive: body
+            }
+          end
+      end,
+
+      output_fields: lambda do
+        [
+          { name: 'jobId', type: 'string', label: 'Job ID' },
+          { name: 'fileName', type: 'string', label: 'Content-Disposition' },
+          {
+            name: 'archive',
+            type: 'string',
+            label: 'Result archive',
+            hint: 'The binary tar.gz response body.'
+          }
+        ]
+      end
+    },
+
+    delete_job: {
+      title: 'Delete a terminal job',
+      description: 'Delete a job after it reaches a terminal state. Uploaded-job workspaces are removed; caller-managed directories are preserved.',
+
+      input_fields: lambda do
+        [{ name: 'jobId', label: 'Job ID', type: 'string', optional: false }]
+      end,
+
+      execute: lambda do |_connection, input|
+        delete("/api/v1/jobs/#{input['jobId']}")
+          .after_response do |code, _body, _response_headers|
+            { deleted: code == 204 }
+          end
+      end,
+
+      output_fields: lambda do
+        [{ name: 'deleted', type: 'boolean', label: 'Deleted' }]
+      end
+    },
+
+    cleanup_jobs: {
+      title: 'Clean up terminal job data',
+      description: 'Delete data for terminal jobs. The all scope also permanently removes the whole shared input and output directories of eligible jobs.',
+
+      input_fields: lambda do
+        [
+          {
+            name: 'scope',
+            label: 'Cleanup scope',
+            type: 'string',
+            control_type: 'select',
+            pick_list: [%w[Uploads uploads], %w[All all]],
+            optional: false
+          }
+        ]
+      end,
+
+      execute: lambda do |_connection, input|
+        post('/api/v1/jobs/cleanup', scope: input['scope'])
+      end,
+
+      output_fields: lambda do
+        [
+          { name: 'scope', type: 'string', label: 'Scope' },
+          { name: 'jobsDeleted', type: 'integer', label: 'Jobs deleted' },
+          { name: 'activeJobsSkipped', type: 'integer', label: 'Active jobs skipped' },
+          { name: 'jobsSkippedForActiveData', type: 'integer', label: 'Jobs skipped for active data' },
+          { name: 'jobsSkippedForServerData', type: 'integer', label: 'Jobs skipped for server data' },
+          { name: 'jobsSkippedForUnsafePaths', type: 'integer', label: 'Jobs skipped for unsafe paths' }
+        ]
+      end
+    }
+  }
+}
