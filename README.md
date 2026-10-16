@@ -63,6 +63,14 @@ You can set the number of OCRmyPDF worker threads with `OCR_JOBS` (default:
 OCR_JOBS=4 bash ocr_batcher/src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
 ```
 
+To select installed OCRmyPDF/Tesseract languages and the optimization level,
+use `--language CODE[+CODE...]` and `--optimize 0..3` (or set
+`OCR_LANGUAGE`/`OCR_OPTIMIZE`; defaults are `eng` and `3`):
+
+```bash
+bash ocr_batcher/src/ocr_sequencial.sh --language deu+eng --optimize 2 "/path/to/input" "/path/to/output"
+```
+
 The source directory must exist. The output directory is created if needed.
 They must be different directories, and the output must not be inside the
 input. Progress and live OCR output appear in tmux panes. See the
@@ -93,11 +101,13 @@ Replace the example tag with a version available in the
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
-TAG=v1.0.0
+TAG=v1.1.0
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
   -e OCR_JOBS=4 \
+  -e OCR_LANGUAGE=deu+eng \
+  -e OCR_OPTIMIZE=2 \
   "ghcr.io/faolanbig/big-batch-ocr:$TAG"
 ```
 
@@ -112,7 +122,7 @@ cd ocr_batcher/docker
 sudo bash build_dockerfile.sh
 ```
 
-Then run the local `ocr_batch_sequencial:1.0.0` image with the same volume
+Then run the local `ocr_batch_sequencial:v1.1.0` image with the same volume
 mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
 
 ### 3. Run the API host
@@ -165,7 +175,7 @@ curl --fail http://127.0.0.1:8080/health
 curl --fail-with-body -i \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"inputPath":"incoming/scans","outputPath":"processed/scans","mode":"asynchronous","createDestination":true}' \
+  -d '{"inputPath":"incoming/scans","outputPath":"processed/scans","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
   http://127.0.0.1:8080/api/v1/jobs
 ```
 

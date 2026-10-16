@@ -19,6 +19,9 @@ resource use: as a first estimate, plan for up to
 `MAX_CONCURRENT_JOBS * OCR_JOBS` OCR threads, plus memory and CPU used by
 scanning and processing individual documents. Start with one concurrent job
 and three OCR threads, monitor the host, and adjust deliberately.
+The API host's `OCR_LANGUAGE` and `OCR_OPTIMIZE` settings provide defaults
+(`eng` and `3`); each job may override them with validated `language` and
+`optimize` fields.
 
 Run one API-host instance against its database. Do not scale this Compose
 service to multiple replicas or run multiple API hosts against one database:
@@ -50,7 +53,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
-For example, `ghcr.io/faolanbig/big-batch-ocr:v1.0.0`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr:v1.1.0`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -214,7 +217,7 @@ response="$(
   curl --fail-with-body --silent --show-error \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true}' \
+    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
     http://127.0.0.1:8080/api/v1/jobs
 )"
 printf '%s\n' "$response" | jq .
@@ -268,6 +271,11 @@ printf '%s\n' "$response" | jq .
 job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
 status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
+
+The `language` and `optimize` fields are optional. `language` accepts one or
+more installed OCRmyPDF/Tesseract language codes joined by `+`; `optimize` is
+an integer from `0` to `3`. Omitted fields use the server defaults. Unknown
+OCR command arguments cannot be supplied.
 
 The archive request body is limited to 1 GiB and its extracted contents to
 10 GiB. Archive entries must be files or directories; links and paths that
@@ -335,7 +343,7 @@ sudo docker run -d --name api-host --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/big-batch-ocr-data:/data:rw \
   -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+  big-batch-ocr-api-host:direct
 ```
 
 This configures two in-process queue workers, with each OCR container using

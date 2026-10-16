@@ -9,7 +9,7 @@ stopped_container=false
 
 usage() {
   printf 'Usage: %s [api-host-image]\n' "$0" >&2
-  printf 'Image defaults to the only locally available testing/proxied image.\n' >&2
+  printf 'Image defaults to the only locally available direct/proxied image.\n' >&2
 }
 
 if (( $# > 1 )); then
@@ -103,7 +103,7 @@ if (( $# == 1 )); then
     exit 1
   fi
 else
-  standard_image=big-batch-ocr-api-host:testing
+  standard_image=big-batch-ocr-api-host:direct
   proxied_image=big-batch-ocr-api-host:proxied
   has_standard=false
   has_proxied=false
@@ -118,7 +118,7 @@ else
   elif [[ "$has_proxied" == true ]]; then
     image="$proxied_image"
   else
-    printf 'No API host image found. Build one first (testing or proxied tag).\n' >&2
+    printf 'No API host image found. Build one first (direct or proxied tag).\n' >&2
     exit 1
   fi
 fi

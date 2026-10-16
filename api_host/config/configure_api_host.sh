@@ -46,10 +46,23 @@ read_positive_integer() {
   done
 }
 
+read_ocr_optimize() {
+  while true; do
+    read_value "OCRmyPDF optimization level (0-3)" "3"
+    if [[ "$REPLY" =~ ^[0-3]$ ]]; then
+      ocr_optimize="$REPLY"
+      return
+    fi
+    printf 'Enter an integer from 0 to 3.\n' >/dev/tty
+  done
+}
+
 ocr_jobs=""
+ocr_language=""
+ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
-read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr:v1.0.0"
+read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr:v1.1.0"
 ocr_image="$REPLY"
 while true; do
   image_name="${ocr_image%@*}"
@@ -58,7 +71,7 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr:v1.0.0"
+  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr:v1.1.0"
   ocr_image="$REPLY"
 done
 
@@ -106,6 +119,15 @@ while true; do
 done
 
 read_positive_integer "OCR worker threads per container" "3" ocr_jobs
+while true; do
+  read_value "Default OCR language codes (join multiple with +)" "eng"
+  if [[ "$REPLY" =~ ^[A-Za-z0-9_]+(\+[A-Za-z0-9_]+)*$ && ${#REPLY} -le 128 ]]; then
+    ocr_language="$REPLY"
+    break
+  fi
+  printf "Use language codes containing only letters, digits, or underscores, joined by '+'.\n" >/dev/tty
+done
+read_ocr_optimize
 read_positive_integer "Maximum concurrent OCR containers" "1" max_concurrent_jobs
 read_positive_integer "Synchronous wait limit in seconds" "30" sync_wait_limit
 
@@ -140,6 +162,8 @@ chmod 600 "$tmp_file"
   printf 'DOCKER_DATA_ROOT=%s\n' "$docker_data_root"
   printf 'DATABASE_PATH=/var/lib/api-host/jobs.db\n'
   printf 'OCR_JOBS=%s\n' "$ocr_jobs"
+  printf 'OCR_LANGUAGE=%s\n' "$ocr_language"
+  printf 'OCR_OPTIMIZE=%s\n' "$ocr_optimize"
   printf 'MAX_CONCURRENT_JOBS=%s\n' "$max_concurrent_jobs"
   printf 'SYNC_WAIT_LIMIT_SECONDS=%s\n' "$sync_wait_limit"
 } > "$tmp_file"

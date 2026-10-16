@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -46,7 +48,7 @@ func testAPI(t *testing.T, executor testExecutor, wait time.Duration) (*API, *Jo
 	jobs.Start()
 	cfg := Config{
 		APIKey: "test-key", DataRoot: root, DockerDataRoot: root,
-		AllowDirectoryAccess: true, SyncWaitLimit: wait,
+		AllowDirectoryAccess: true, OCRLanguage: "eng", OCROptimize: 3, SyncWaitLimit: wait,
 	}
 	api := NewAPI(cfg, jobs, store, logger)
 	cleanup := func() {
@@ -133,12 +135,60 @@ func TestAsyncJobThenStatusAndSyncSuccess(t *testing.T) {
 	if saved.ContainerID != "container-id" || saved.ContainerLogs != "captured test log" {
 		t.Fatalf("container metadata was not persisted: %#v", saved)
 	}
+	if saved.OCRLanguage != "eng" || saved.OCROptimize != 3 {
+		t.Fatalf("default OCR options were not persisted: %q/%d", saved.OCRLanguage, saved.OCROptimize)
+	}
 	if strings.Contains(status.Body.String(), "captured test log") || strings.Contains(status.Body.String(), "container-id") {
 		t.Fatal("internal container details leaked through the public API")
 	}
 	syncResponse := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"synchronous"}`)
 	if syncResponse.Code != http.StatusOK {
 		t.Fatalf("sync status = %d, body: %s", syncResponse.Code, syncResponse.Body.String())
+	}
+}
+
+func TestSubmitJobAcceptsValidatedOCROverrides(t *testing.T) {
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","language":"deu+eng","optimize":0}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.OCRLanguage != "deu+eng" || job.OCROptimize != 0 {
+		t.Fatalf("stored OCR options = %q/%d", job.OCRLanguage, job.OCROptimize)
+	}
+
+	for _, body := range []string{
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","language":"eng;--side-channel"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","optimize":4}`,
+	} {
+		response := submitTestJob(api, body)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_OCR_OPTIONS") {
+			t.Fatalf("invalid OCR options response = %d, body: %s", response.Code, response.Body.String())
+		}
+	}
+	for _, body := range []string{
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","language":null}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","optimize":null}`,
+	} {
+		response := submitTestJob(api, body)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("null OCR option response = %d, body: %s", response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -235,6 +285,36 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	}
 	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("uploaded workspace remains after explicit job deletion: err=%v", err)
+	}
+}
+
+func TestMultipartArchiveAcceptsOCROverrides(t *testing.T) {
+	received := make(chan OCROptions, 1)
+	api, _, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		received <- OCROptions{Language: job.OCRLanguage, Optimize: job.OCROptimize}
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	body, contentType := multipartArchiveRequestWithOCR(t, testArchive(t, "invoice.pdf", "source"), "asynchronous", "deu+eng", "0")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("multipart submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	select {
+	case options := <-received:
+		if options != (OCROptions{Language: "deu+eng", Optimize: 0}) {
+			t.Fatalf("executor received OCR options = %#v", options)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OCR job was not executed")
 	}
 }
 
@@ -867,6 +947,118 @@ func TestNonzeroContainerExitIsPersistedAsFailure(t *testing.T) {
 	}
 }
 
+func TestFailedJobCanBeResumedWithSameIDAndOCRSettings(t *testing.T) {
+	var attempts atomic.Int32
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, saveLogs func([]byte) error) (int, error) {
+		attempt := attempts.Add(1)
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		if attempt == 1 {
+			if err := saveLogs([]byte("first attempt")); err != nil {
+				return 1, err
+			}
+			return 1, errors.New("first attempt failed")
+		}
+		if job.OCRLanguage != "deu+eng" || job.OCROptimize != 0 {
+			return 1, errors.New("resume lost OCR settings")
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","language":"deu+eng","optimize":0}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, store, accepted.JobID, "failed")
+
+	resumed := resumeTestJob(api, accepted.JobID)
+	if resumed.Code != http.StatusAccepted {
+		t.Fatalf("resume status = %d, body: %s", resumed.Code, resumed.Body.String())
+	}
+	var resumedAck acknowledgement
+	if err := json.Unmarshal(resumed.Body.Bytes(), &resumedAck); err != nil {
+		t.Fatal(err)
+	}
+	if resumedAck.JobID != accepted.JobID || resumedAck.Status != "queued" {
+		t.Fatalf("resume acknowledgement = %#v, want original ID queued", resumedAck)
+	}
+	if resumed.Header().Get("Location") != accepted.StatusURL {
+		t.Fatalf("resume Location = %q, want %q", resumed.Header().Get("Location"), accepted.StatusURL)
+	}
+	job := waitForJobStatus(t, store, accepted.JobID, "succeeded")
+	if job.Error != nil || job.ExitCode == nil || *job.ExitCode != 0 || job.ContainerLogs != "" {
+		t.Fatalf("previous attempt metadata was not cleared: %#v", job)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("executor attempts = %d, want 2", attempts.Load())
+	}
+	if _, err := store.Create("input", "output", "/host/input", "/host/output"); err != nil {
+		t.Fatalf("new job after resume could not be queued: %v", err)
+	}
+}
+
+func TestOnlyFailedOrCancelledJobsCanBeResumed(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	api, store, cleanup := testAPI(t, testExecutor{run: func(ctx context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("blocking-container"); err != nil {
+			return 1, err
+		}
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			return 0, nil
+		case <-ctx.Done():
+			return 1, ctx.Err()
+		}
+	}}, time.Second)
+	defer func() {
+		close(release)
+		cleanup()
+	}()
+
+	active := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous"}`)
+	if active.Code != http.StatusAccepted {
+		t.Fatalf("active-job submission status = %d, body: %s", active.Code, active.Body.String())
+	}
+	<-started
+	for _, status := range []string{"queued", "starting", "running", "cancelling", "succeeded"} {
+		job, err := store.Create("input", "output", "/host/input", "/host/output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`UPDATE jobs SET status=? WHERE id=?`, status, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		response := resumeTestJob(api, job.ID)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"JOB_NOT_RESUMABLE"`) {
+			t.Fatalf("resume %s job status = %d, body: %s", status, response.Code, response.Body.String())
+		}
+	}
+	if response := resumeTestJob(api, "missing-job"); response.Code != http.StatusNotFound {
+		t.Fatalf("resume missing job status = %d, body: %s", response.Code, response.Body.String())
+	}
+
+	cancelled, err := store.Create("input", "output", "/host/input", "/host/output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE jobs SET status='cancelled' WHERE id=?`, cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := resumeTestJob(api, cancelled.ID)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("resume cancelled job status = %d, body: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestJobPersistsAcrossStoreReopenAndRecoveryFailsActiveState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := OpenJobStore(path)
@@ -913,16 +1105,61 @@ func submitTestJob(api *API, body string) *httptest.ResponseRecorder {
 	return recorder
 }
 
+func resumeTestJob(api *API, id string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+id+"/resume", nil)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	api.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func waitForJobStatus(t *testing.T, store *JobStore, id, status string) Job {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := store.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == status {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	job, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("job status = %q, want %q", job.Status, status)
+	return Job{}
+}
+
 func multipartArchiveRequest(t *testing.T, archive []byte, withArchive bool) (*bytes.Buffer, string) {
 	return multipartArchiveRequestWithMode(t, archive, withArchive, "synchronous")
 }
 
 func multipartArchiveRequestWithMode(t *testing.T, archive []byte, withArchive bool, mode string) (*bytes.Buffer, string) {
+	return multipartArchiveRequestWithFields(t, archive, withArchive, mode, nil)
+}
+
+func multipartArchiveRequestWithOCR(t *testing.T, archive []byte, mode, language, optimize string) (*bytes.Buffer, string) {
+	return multipartArchiveRequestWithFields(t, archive, true, mode, map[string]string{
+		"language": language,
+		"optimize": optimize,
+	})
+}
+
+func multipartArchiveRequestWithFields(t *testing.T, archive []byte, withArchive bool, mode string, fields map[string]string) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("mode", mode); err != nil {
 		t.Fatal(err)
+	}
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if withArchive {
 		part, err := writer.CreateFormFile("inputArchive", "input.tar.gz")

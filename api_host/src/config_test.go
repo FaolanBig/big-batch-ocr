@@ -14,6 +14,8 @@ func TestLoadConfigRequiresKeyUnlessAnonymous(t *testing.T) {
 	t.Setenv("DOCKER_DATA_ROOT", "/srv/data")
 	t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "jobs.db"))
 	t.Setenv("OCR_IMAGE", "ghcr.io/faolanbig/big-batch-ocr:v1.2.3")
+	t.Setenv("OCR_LANGUAGE", "eng")
+	t.Setenv("OCR_OPTIMIZE", "3")
 	t.Setenv("API_KEY", "")
 	t.Setenv("ALLOW_ANONYMOUS", "false")
 	if _, err := LoadConfig(); err == nil {
@@ -26,6 +28,9 @@ func TestLoadConfigRequiresKeyUnlessAnonymous(t *testing.T) {
 	}
 	if !cfg.AllowAnonymous {
 		t.Fatal("anonymous mode not enabled")
+	}
+	if cfg.OCRLanguage != "eng" || cfg.OCROptimize != 3 {
+		t.Fatalf("OCR defaults = %q/%d, want eng/3", cfg.OCRLanguage, cfg.OCROptimize)
 	}
 }
 
@@ -47,6 +52,8 @@ func TestLoadConfigDirectoryAccessDefaultsDisabledAndCanBeEnabled(t *testing.T) 
 	t.Setenv("DOCKER_DATA_ROOT", "/srv/data")
 	t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "jobs.db"))
 	t.Setenv("OCR_IMAGE", "ghcr.io/faolanbig/big-batch-ocr:v1.2.3")
+	t.Setenv("OCR_LANGUAGE", "eng")
+	t.Setenv("OCR_OPTIMIZE", "3")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -73,6 +80,8 @@ func TestLoadConfigRejectsMutableImageAndInvalidConcurrency(t *testing.T) {
 	t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "jobs.db"))
 	t.Setenv("ALLOW_ANONYMOUS", "true")
 	t.Setenv("OCR_IMAGE", "example/ocr:latest")
+	t.Setenv("OCR_LANGUAGE", "eng")
+	t.Setenv("OCR_OPTIMIZE", "3")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("expected latest tag to fail")
 	}
@@ -86,6 +95,44 @@ func TestLoadConfigRejectsMutableImageAndInvalidConcurrency(t *testing.T) {
 	t.Setenv("MAX_CONCURRENT_JOBS", "0")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("expected zero concurrency to fail")
+	}
+	t.Setenv("MAX_CONCURRENT_JOBS", "1")
+	t.Setenv("OCR_IMAGE", "example/ocr:v1")
+	t.Setenv("OCR_LANGUAGE", "eng;--force-ocr")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("expected invalid OCR language to fail")
+	}
+	t.Setenv("OCR_LANGUAGE", "deu+eng")
+	t.Setenv("OCR_OPTIMIZE", "+2")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("expected invalid OCR optimization value to fail")
+	}
+}
+
+func TestOCRConfigurationValidation(t *testing.T) {
+	for _, language := range []string{"eng", "deu+eng", "chi_sim"} {
+		if got, err := validateOCRLanguage(language); err != nil || got != language {
+			t.Fatalf("validateOCRLanguage(%q) = %q, %v", language, got, err)
+		}
+	}
+	for _, language := range []string{"", "+eng", "eng+", "eng++deu", "eng;--force-ocr", "eng deu"} {
+		if _, err := validateOCRLanguage(language); err == nil {
+			t.Errorf("validateOCRLanguage(%q) should fail", language)
+		}
+	}
+	for _, optimize := range []int{0, 1, 2, 3} {
+		if got, err := validateOCROptimize(optimize); err != nil || got != optimize {
+			t.Errorf("validateOCROptimize(%d) = %d, %v", optimize, got, err)
+		}
+	}
+	for _, optimize := range []int{-1, 4} {
+		if _, err := validateOCROptimize(optimize); err == nil {
+			t.Errorf("validateOCROptimize(%d) should fail", optimize)
+		}
+	}
+	t.Setenv("OCR_OPTIMIZE", "04")
+	if _, err := envOCROptimize("OCR_OPTIMIZE", 3); err == nil {
+		t.Fatal("expected non-canonical optimization level to fail")
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"os"
@@ -11,6 +12,63 @@ import (
 	"testing"
 	"time"
 )
+
+func TestJobStoreMigratesAndPersistsOCROptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE jobs (
+		queue_order INTEGER PRIMARY KEY AUTOINCREMENT,
+		id TEXT NOT NULL UNIQUE,
+		status TEXT NOT NULL,
+		input_path TEXT NOT NULL,
+		output_path TEXT NOT NULL,
+		input_host TEXT NOT NULL,
+		output_host TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		started_at TEXT,
+		completed_at TEXT,
+		exit_code INTEGER,
+		error_code TEXT,
+		error_message TEXT,
+		container_id TEXT,
+		container_logs TEXT
+	);
+	INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at)
+		VALUES('legacy', 'queued', 'in', 'out', '/in', '/out', '2026-01-01T00:00:00Z');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenJobStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := store.Get("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.OCRLanguage != "eng" || legacy.OCROptimize != 3 {
+		t.Fatalf("legacy job defaults = %q/%d", legacy.OCRLanguage, legacy.OCROptimize)
+	}
+	created, err := store.Create("in", "out", "/in", "/out", OCROptions{Language: "deu+eng", Optimize: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.OCRLanguage != "deu+eng" || reloaded.OCROptimize != 0 {
+		t.Fatalf("reloaded job OCR options = %q/%d", reloaded.OCRLanguage, reloaded.OCROptimize)
+	}
+}
 
 func TestJobWorkersRespectConcurrencyLimit(t *testing.T) {
 	store, err := OpenJobStore(filepath.Join(t.TempDir(), "jobs.db"))

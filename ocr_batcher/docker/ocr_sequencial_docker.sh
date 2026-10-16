@@ -9,6 +9,8 @@ set -Eeuo pipefail
 ###################################################################
 
 # set OCR_JOBS to specify the number of CPU threads to use for OCR processing
+# set OCR_LANGUAGE to specify OCRmyPDF language codes, joined with +
+# set OCR_OPTIMIZE to specify OCRmyPDF optimization level (0-3)
 # set SOURCE_DIR to specify the source directory containing PDF files for OCR processing (-v /daten/input:/source:ro) <-- the source directory is mounted in read-only mode
 # set TARGET_DIR to specify the target directory where processed PDF files will be saved (-v /daten/output:/destination)
 
@@ -29,6 +31,8 @@ set -Eeuo pipefail
 #####################
 
 SCRIPT_NAME="$(basename "$0")"
+OCR_LANGUAGE="${OCR_LANGUAGE:-eng}"
+OCR_OPTIMIZE="${OCR_OPTIMIZE:-3}"
 
 SOURCE_DIR="/source" # the real source directory has to be mounted to the docker container
 TARGET_DIR="/destination" # the real destination directory has to be mounted to the docker container
@@ -44,6 +48,28 @@ die() {
     echo "[ERROR] $*" >&2
     exit 1
 }
+
+while (($# > 0)); do
+    case "$1" in
+        --language|-l)
+            (($# >= 2)) || die "Usage: $SCRIPT_NAME [--language CODE[+CODE...]] [--optimize 0..3]"
+            OCR_LANGUAGE="$2"
+            shift 2
+            ;;
+        --optimize)
+            (($# >= 2)) || die "Usage: $SCRIPT_NAME [--language CODE[+CODE...]] [--optimize 0..3]"
+            OCR_OPTIMIZE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            printf 'Usage: %s [--language CODE[+CODE...]] [--optimize 0..3]\n' "$SCRIPT_NAME"
+            exit 0
+            ;;
+        *)
+            die "Unsupported option: $1"
+            ;;
+    esac
+done
 
 update_status() {
     local now elapsed remaining eta percent
@@ -123,6 +149,11 @@ trap cleanup EXIT
 if [[ -z "$SOURCE_DIR" || -z "$TARGET_DIR" ]]; then
     die "Usage: $SCRIPT_NAME <source_dir> <target_dir>"
 fi
+
+[[ "$OCR_LANGUAGE" =~ ^[A-Za-z0-9_]+(\+[A-Za-z0-9_]+)*$ && ${#OCR_LANGUAGE} -le 128 ]] \
+    || die "OCR_LANGUAGE must be language codes separated by '+', using only letters, digits, or underscores."
+[[ "$OCR_OPTIMIZE" =~ ^[0-3]$ ]] \
+    || die "OCR_OPTIMIZE must be an integer from 0 to 3."
 
 command -v ocrmypdf >/dev/null \
     || die "ocrmypdf not found"
@@ -294,7 +325,7 @@ for pdf in "${PDF_FILES[@]}"; do
         update_status
         continue
     }
-    source_signature="$SOURCE_DIR/$rel:${source_hash%% *}"
+    source_signature="$SOURCE_DIR/$rel:${source_hash%% *}:$OCR_LANGUAGE:$OCR_OPTIMIZE"
 
     if ! mkdir -p -- "$(dirname "$out")"; then
         echo "[ERROR] Could not prepare destination: $out" | tee -a "$ERROR_LOG"
@@ -345,11 +376,12 @@ for pdf in "${PDF_FILES[@]}"; do
 
     run_ocr() {
         ocrmypdf \
+            --language "$OCR_LANGUAGE" \
             --rotate-pages \
             --deskew \
             --clean \
             --clean-final \
-            --optimize "$1" \
+            --optimize "$OCR_OPTIMIZE" \
             --output-type pdf \
             --skip-text \
             --jobs "$CPU_THREADS" \
@@ -359,7 +391,7 @@ for pdf in "${PDF_FILES[@]}"; do
     }
 
     ocr_rc=0
-    run_ocr 3 || ocr_rc=$?
+    run_ocr || ocr_rc=$?
 
     if (( ocr_rc == 0 ))
     then

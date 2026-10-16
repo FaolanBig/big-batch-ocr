@@ -34,6 +34,10 @@ type submitRequest struct {
 	OutputPath             string          `json:"outputPath"`
 	Mode                   string          `json:"mode"`
 	CreateDestination      json.RawMessage `json:"createDestination"`
+	LanguageValue          json.RawMessage `json:"language"`
+	OptimizeValue          json.RawMessage `json:"optimize"`
+	Language               *string         `json:"-"`
+	Optimize               *int            `json:"-"`
 	CreateDestinationValue bool            `json:"-"`
 }
 
@@ -76,6 +80,7 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
 	api.mux.Handle("DELETE /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.deleteJob)))
 	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
+	api.mux.Handle("POST /api/v1/jobs/{jobId}/resume", api.authenticate(http.HandlerFunc(api.resumeJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
 	return api
 }
@@ -124,6 +129,23 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
 		return
+	}
+	options := OCROptions{Language: a.config.OCRLanguage, Optimize: a.config.OCROptimize}
+	if request.Language != nil {
+		options.Language, err = validateOCRLanguage(*request.Language)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid OCR options", "INVALID_OCR_OPTIONS",
+				"language must contain valid OCR language codes separated by '+'.")
+			return
+		}
+	}
+	if request.Optimize != nil {
+		options.Optimize, err = validateOCROptimize(*request.Optimize)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid OCR options", "INVALID_OCR_OPTIONS",
+				"optimize must be an integer from 0 to 3.")
+			return
+		}
 	}
 	if archive == nil && !a.config.AllowDirectoryAccess {
 		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
@@ -198,9 +220,9 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	var job Job
 	if uploadedJobID != "" {
-		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost, options)
 	} else {
-		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost, options)
 	}
 	if err != nil {
 		a.logger.Error("could not persist OCR job", "error", err)
@@ -231,7 +253,7 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		form := r.MultipartForm
 		for key := range form.Value {
 			switch key {
-			case "inputPath", "outputPath", "mode", "createDestination":
+			case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize":
 			default:
 				return submitRequest{}, nil, errors.New("unknown multipart field")
 			}
@@ -270,6 +292,26 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 				return submitRequest{}, nil, errors.New("createDestination must be true or false")
 			}
 		}
+		var language *string
+		if _, exists := form.Value["language"]; exists {
+			value, err := multipartTextField(r, "language", false)
+			if err != nil {
+				return submitRequest{}, nil, err
+			}
+			language = &value
+		}
+		var optimize *int
+		if _, exists := form.Value["optimize"]; exists {
+			value, err := multipartTextField(r, "optimize", false)
+			if err != nil {
+				return submitRequest{}, nil, err
+			}
+			parsed, err := parseOCROptimize(value)
+			if err != nil {
+				return submitRequest{}, nil, errors.New("optimize must be an integer")
+			}
+			optimize = &parsed
+		}
 		var archive *multipart.FileHeader
 		if files := form.File["inputArchive"]; len(files) == 1 {
 			archive = files[0]
@@ -288,7 +330,7 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		}
 		return submitRequest{
 			InputPath: inputPath, OutputPath: outputPath, Mode: mode,
-			CreateDestinationValue: create,
+			CreateDestinationValue: create, Language: language, Optimize: optimize,
 		}, archive, nil
 	}
 
@@ -311,6 +353,22 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		if trimmed == "null" || json.Unmarshal(request.CreateDestination, &request.CreateDestinationValue) != nil {
 			return submitRequest{}, nil, errors.New("createDestination must be a boolean")
 		}
+	}
+	if len(request.LanguageValue) != 0 {
+		trimmed := strings.TrimSpace(string(request.LanguageValue))
+		var language string
+		if trimmed == "null" || json.Unmarshal(request.LanguageValue, &language) != nil {
+			return submitRequest{}, nil, errors.New("language must be a string")
+		}
+		request.Language = &language
+	}
+	if len(request.OptimizeValue) != 0 {
+		trimmed := strings.TrimSpace(string(request.OptimizeValue))
+		var optimize int
+		if trimmed == "null" || json.Unmarshal(request.OptimizeValue, &optimize) != nil {
+			return submitRequest{}, nil, errors.New("optimize must be an integer")
+		}
+		request.Optimize = &optimize
 	}
 	return request, nil, nil
 }
@@ -679,6 +737,31 @@ func (a *API) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusConflict, "Job is already terminal", "JOB_NOT_CANCELLABLE",
 			"Only queued or running jobs can be cancelled.")
 	}
+}
+
+func (a *API) resumeJob(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Resume(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if errors.Is(err, ErrJobNotResumable) {
+		writeProblem(w, http.StatusConflict, "Job cannot be resumed", "JOB_NOT_RESUMABLE",
+			"Only failed or cancelled jobs can be resumed.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not resume OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be resumed.")
+		return
+	}
+	w.Header().Set("Location", job.StatusURL)
+	writeJSON(w, http.StatusAccepted, acknowledgement{JobID: job.ID, Status: "queued", StatusURL: job.StatusURL})
 }
 
 func (a *API) deleteJob(w http.ResponseWriter, r *http.Request) {

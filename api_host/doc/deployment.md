@@ -12,7 +12,7 @@ bash api_host/build/build_dockerfile.sh
 bash api_host/build/build_dockerfile_proxied_cert.sh
 ```
 
-The standard script builds `big-batch-ocr-api-host:testing`. The proxied
+The standard script builds `big-batch-ocr-api-host:direct`. The proxied
 script builds `big-batch-ocr-api-host:proxied` and uses the readable
 certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
 BuildKit secret. The CA is mounted only while Go downloads modules; it is not
@@ -36,6 +36,8 @@ protected `.env` file:
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
 | `OCR_IMAGE` | Yes | — | OCR image reference with an explicit release tag or digest; do not use `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
+| `OCR_LANGUAGE` | No | `eng` | Default OCRmyPDF language code or `+`-separated language codes, such as `deu+eng` |
+| `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`) |
 | `MAX_CONCURRENT_JOBS` | No | `1` | Maximum OCR containers running at once |
 | `SYNC_WAIT_LIMIT_SECONDS` | No | `30` | Synchronous response wait limit; a timeout does not cancel the job |
 | `API_ADDRESS` | No | `:8080` | HTTP listen address |
@@ -176,6 +178,14 @@ curl --fail-with-body \
   -H "Authorization: Bearer $API_KEY" \
   http://127.0.0.1:8080/api/v1/jobs/job_ID_FROM_RESPONSE
 ```
+
+Each submission may include `language` and/or `optimize` to override these
+defaults for that job. Language values are limited to letters, digits, and
+underscores in one or more codes joined with `+`; optimization must be an
+integer from `0` through `3`. The API rejects invalid values and does not
+accept arbitrary OCRmyPDF or Docker arguments. For example, use
+`"language":"deu+eng","optimize":2` in JSON, or the corresponding multipart
+fields for an archive upload.
 
 For synchronous execution, set `"mode":"synchronous"`. On success the host
 returns `200`; a container failure returns a safe `500` problem response. At
