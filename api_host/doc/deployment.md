@@ -74,6 +74,14 @@ trusted operators. The host only accepts input/output paths relative to
 `DATA_ROOT`; it does not expose arbitrary Docker options, images, mounts, or
 host paths to callers.
 
+For API submissions, prefer uploading an input `.tar.gz` archive and keep
+`ALLOW_DIRECTORY_ACCESS=false`. Archive uploads are extracted into isolated
+per-job input/output workspaces managed by the API. Shared-directory jobs let
+API callers select existing paths under `DATA_ROOT`, increasing the impact of
+path-selection mistakes and exposing shared data to job processing. Enable
+directory access only when required, and only for trusted callers and a
+carefully restricted data root.
+
 `DOCKER_DATA_ROOT` is the absolute host path as seen by the Docker daemon; the
 Compose bind mounts that host directory at `/data` inside the API container.
 Keep the two roots aligned as shown so a validated relative path maps to the
