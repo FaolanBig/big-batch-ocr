@@ -38,6 +38,23 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find most recently created Git tag
+        id: latest-tag
+        shell: bash
+        run: |
+          latest_tag="$(git tag --sort=-creatordate | sed -n '1p')"
+          if [[ -z "$latest_tag" ]]; then
+            echo "No Git tags exist; cannot determine the image tag." >&2
+            exit 1
+          fi
+          if [[ ! "$latest_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "The most recently created Git tag is not a valid Docker tag: $latest_tag" >&2
+            exit 1
+          fi
+          echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
 
       # Install the cosign tool for merged pull requests.
       # https://github.com/sigstore/cosign-installer
@@ -69,7 +86,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
-            type=sha
+            type=raw,value=${{ steps.latest-tag.outputs.tag }}
 
       # Build and push Docker image for the merged pull request.
       # https://github.com/docker/build-push-action
