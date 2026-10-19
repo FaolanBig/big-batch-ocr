@@ -69,8 +69,10 @@ OCR containers. You do not need to create the root manually. To use the
 shared-directory submission method, enable directory-based submissions in the
 configurator, then create the input/output subdirectories inside that root and
 put source files in the input directory. Directory submissions are disabled
-by default; archive uploads need no pre-created input or output directories
-because the API creates an isolated per-job workspace.
+by default. For security, keep them disabled and submit input as `.tar.gz`
+archives through the API; each archive gets an isolated per-job workspace.
+Enable shared-directory submissions only for trusted callers when they are
+specifically needed.
 
 ### 3. Configure runtime credentials
 

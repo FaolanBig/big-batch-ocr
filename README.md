@@ -127,7 +127,9 @@ mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docke
 
 ### 3. Run the API host
 
-The API host accepts either a shared-directory input or an uploaded `.tar.gz`
+For security, prefer uploading `.tar.gz` archives through the API and leave
+shared-directory submissions disabled unless they are required for trusted
+callers. The API host accepts either a shared-directory input or an uploaded
 archive, starts the configured OCR image using Docker, records jobs in a
 persistent SQLite database, and exposes synchronous and asynchronous modes.
 Uploaded jobs receive isolated input/output folders, and the result can be
