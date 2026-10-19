@@ -6,6 +6,13 @@ name: Docker
 # documentation.
 
 on:
+  pull_request: 
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
   release:
     types: [published, edited, released, prereleased]
 
@@ -13,7 +20,7 @@ env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
   # github.repository as <account>/<repo>
-  IMAGE_NAME: faolanbig/big-batch-ocr
+  IMAGE_NAME: faolanbig/big-batch-ocr_ocr-sequencial
 
 
 jobs:
