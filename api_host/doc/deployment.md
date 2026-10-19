@@ -1,8 +1,25 @@
 # API host deployment
 
-## Build and runtime configuration
+## Pre-compiled image and runtime configuration
 
-From the repository root, build either image:
+The recommended deployment uses the pre-compiled API-host image published to
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
+Use a published release tag; this example uses `v1.1.0`. Pull the image now,
+then start it after configuring the runtime environment below:
+
+```sh
+TAG=v1.1.0
+API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
+sudo docker pull "$API_IMAGE"
+```
+
+The launcher accepts any image already present locally, including the
+pre-compiled GHCR image above.
+
+### Compile the API host yourself
+
+If you prefer to compile it yourself, run either build script from the
+repository root:
 
 ```sh
 # Standard build; does not pass a CA certificate secret.
@@ -19,9 +36,9 @@ BuildKit secret. The CA is mounted only while Go downloads modules; it is not
 copied into the resulting image. Neither script reads the runtime `.env`.
 
 The same runtime setup works for either image because the CA secret only
-changes how dependencies are downloaded during the build. The launcher below
-selects the sole locally available image automatically, or accepts an image
-tag when both are present.
+changes how dependencies are downloaded during the build. The launcher
+selects the sole locally available direct/proxied image automatically, or
+accepts an image tag when both are present.
 
 Before starting, configure the runtime variables. These can be passed using a
 protected `.env` file:
@@ -34,7 +51,7 @@ protected `.env` file:
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | No | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
-| `OCR_IMAGE` | Yes | — | OCR image reference with an explicit release tag or digest; do not use `latest` (prefer a digest for immutable pinning) |
+| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.1.0`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
 | `OCR_LANGUAGE` | No | `eng` | Default OCRmyPDF language code or `+`-separated language codes, such as `deu+eng` |
 | `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`) |
@@ -136,13 +153,16 @@ replace `DOCKER_GID` with `stat -c '%g' /var/run/docker.sock`. Use plain
 `KEY=VALUE` syntax without `export`. Keep the secret file private and do not
 commit it.
 
-Start with the single launcher for either image:
+Start the pre-compiled image with the launcher:
 
 ```sh
-./api_host/run/run_container.sh
+TAG=v1.1.0
+API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
+./api_host/run/run_container.sh "$API_IMAGE"
 ```
 
-If both image tags are installed, specify the desired tag:
+If you compiled it yourself, the launcher selects the sole local build
+automatically. If both local builds are available, specify the desired tag:
 
 ```sh
 ./api_host/run/run_container.sh big-batch-ocr-api-host:proxied

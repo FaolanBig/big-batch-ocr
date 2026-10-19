@@ -12,14 +12,21 @@ on:
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
-  # github.repository as <account>/<repo>
-  IMAGE_NAME: faolanbig/big-batch-ocr
 
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: faolanbig/big-batch-ocr_ocr-sequencial
+            context: ./ocr_batcher/docker
+            file: ./ocr_batcher/docker/Dockerfile
+          - image: faolanbig/big-batch-ocr_api-host
+            context: .
+            file: ./api_host/docker/Dockerfile
     permissions:
       contents: read
       packages: write
@@ -61,7 +68,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=ref,event=tag
 
@@ -71,8 +78,8 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
         with:
-          context: ./ocr_batcher/docker
-          file: ./ocr_batcher/docker/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
