@@ -29,7 +29,7 @@ docker run --rm -it \
   -v /path/to/source:/source:ro \
   -v /path/to/target:/destination \
   -e OCR_JOBS=4 \
-  ghcr.io/faolanbig/big-batch-ocr:<tag>
+  ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:<tag>
 ```
 
 The Docker entry point uses the same positive-integer `OCR_JOBS` override and defaults to 75% of the logical CPU count when it is unset.

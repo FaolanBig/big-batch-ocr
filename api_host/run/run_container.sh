@@ -9,7 +9,7 @@ stopped_container=false
 
 usage() {
   printf 'Usage: %s [api-host-image]\n' "$0" >&2
-  printf 'Image defaults to the only locally available direct/proxied image.\n' >&2
+  printf 'Pass a pre-pulled GHCR image or use the only locally available direct/proxied image.\n' >&2
 }
 
 if (( $# > 1 )); then
@@ -118,7 +118,7 @@ else
   elif [[ "$has_proxied" == true ]]; then
     image="$proxied_image"
   else
-    printf 'No API host image found. Build one first (direct or proxied tag).\n' >&2
+    printf 'No API host image found. Pull a published GHCR image or build one (direct or proxied tag).\n' >&2
     exit 1
   fi
 fi

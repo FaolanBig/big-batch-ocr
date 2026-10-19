@@ -14,7 +14,7 @@ For bare-metal installation of the Bash script's dependencies on Debian/Ubuntu, 
 
 ## Docker
 
-Prebuilt Docker images are published to [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr). See [Run OCR in Docker](doc/run_with_docker.md) for pull and run instructions.
+Prebuilt Docker images are published to [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial). See [Run OCR in Docker](doc/run_with_docker.md) for pull and run instructions.
 
 ## Quick Start
 

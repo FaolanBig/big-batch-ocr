@@ -97,7 +97,7 @@ dependency-install path to fetch OCRmyPDF from the AUR.
 
 The published image starts OCR automatically. The tag used here will pull the base release. 
 Replace the example tag with a version available in the
-[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr) if you want a specific release;
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial) if you want a specific release;
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
@@ -108,7 +108,7 @@ docker run --rm -it \
   -e OCR_JOBS=4 \
   -e OCR_LANGUAGE=deu+eng \
   -e OCR_OPTIMIZE=2 \
-  "ghcr.io/faolanbig/big-batch-ocr:$TAG"
+  "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:$TAG"
 ```
 
 The paths shown are examples; choose a published version and replace the host
@@ -156,12 +156,20 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
 Replace the example root if you selected a different one. Archive uploads do
 not need these child folders; the API creates isolated per-job input/output
 directories automatically. The configured OCR image is pulled on first use if
-it is not already available locally. Build the API image and start the host:
+it is not already available locally. Pull and start the pre-compiled API host:
 
 ```bash
-bash api_host/build/build_dockerfile.sh
-./api_host/run/run_container.sh
+TAG=v1.1.0
+API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
+sudo docker pull "$API_IMAGE"
+./api_host/run/run_container.sh "$API_IMAGE"
 ```
+
+This uses the pre-compiled API-host image published to GHCR. To compile the API
+host yourself instead, build the standard image with
+`bash api_host/build/build_dockerfile.sh` (or use
+`bash api_host/build/build_dockerfile_proxied_cert.sh` when building behind a
+TLS-inspection proxy), then start it with `./api_host/run/run_container.sh`.
 
 The API listens on `127.0.0.1:8080` by default. Check liveness and submit an
 asynchronous job (replace the paths and key):
