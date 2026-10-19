@@ -23,9 +23,11 @@ jobs:
       matrix:
         include:
           - image: faolanbig/big-batch-ocr_ocr-sequencial
+            cache-scope: ocr-sequencial
             context: ./ocr_batcher/docker
             file: ./ocr_batcher/docker/Dockerfile
           - image: faolanbig/big-batch-ocr_api-host
+            cache-scope: api-host
             context: .
             file: ./api_host/docker/Dockerfile
     permissions:
@@ -99,8 +101,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.cache-scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }},ignore-error=true
 
       # Sign the resulting Docker image digest.
       # This will only write to the public Rekor transparency log when the Docker
