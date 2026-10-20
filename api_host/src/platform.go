@@ -33,7 +33,7 @@ func detectRuntimePlatformFrom(kubernetesHost, tokenPath string) (string, error)
 		}
 		return "", errors.New("Kubernetes service-account token path is not a regular file")
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("inspect Kubernetes service-account credentials: %w", err)
 	}
 	if kubernetesHost != "" {
