@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	RuntimePlatform      string
 	Address              string
 	APIKey               string
 	AllowAnonymous       bool
@@ -56,10 +57,9 @@ func LoadConfig() (Config, error) {
 	if cfg.DataRoot, err = absoluteDirectory(cfg.DataRoot, "DATA_ROOT"); err != nil {
 		return Config{}, err
 	}
-	if !filepath.IsAbs(cfg.DockerDataRoot) {
-		return Config{}, errors.New("DOCKER_DATA_ROOT must be an absolute path visible to the Docker daemon")
+	if err := validateRuntimeConfig(&cfg); err != nil {
+		return Config{}, err
 	}
-	cfg.DockerDataRoot = filepath.Clean(cfg.DockerDataRoot)
 	if !filepath.IsAbs(cfg.DatabasePath) {
 		return Config{}, errors.New("DATABASE_PATH must be absolute")
 	}
