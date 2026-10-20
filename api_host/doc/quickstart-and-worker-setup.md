@@ -1,7 +1,9 @@
-# Quickstart and worker setup
+# Docker quickstart and worker setup
 
-This guide takes you from a clean checkout to a running API host that starts
-OCR containers for accepted jobs.
+This guide takes you from a clean checkout to a running Docker deployment that
+starts OCR containers for accepted jobs. For Kubernetes, use the
+[`deployment.md`](deployment.md#kubernetes-deployment) guide; the same API host
+automatically selects Kubernetes Jobs when it runs in a Kubernetes pod.
 
 ## How the worker is included
 

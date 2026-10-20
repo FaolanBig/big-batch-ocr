@@ -40,6 +40,11 @@ changes how dependencies are downloaded during the build. The launcher
 selects the sole locally available direct/proxied image automatically, or
 accepts an image tag when both are present.
 
+The API host automatically selects its OCR execution backend: a pod with
+Kubernetes in-cluster service-account credentials uses Kubernetes Jobs; all
+other deployments use Docker Engine. There is one API-host image and no
+platform-selection environment variable. Do not set a platform flag.
+
 Before starting, configure the runtime variables. These can be passed using a
 protected `.env` file:
 
@@ -49,7 +54,7 @@ protected `.env` file:
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
-| `DOCKER_DATA_ROOT` | No | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon |
+| `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon; ignored in Kubernetes |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
 | `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.1.0`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
@@ -64,6 +69,57 @@ Use your deployment secret manager to inject `API_KEY`; do not put a production
 key in the Compose file or source control. Generate a high-entropy key, restrict
 network exposure (the Compose example binds localhost), and terminate TLS at a
 trusted reverse proxy when remote clients need access.
+
+## Kubernetes deployment
+
+[`../k8s/api-host.yaml`](../k8s/api-host.yaml) deploys the same API-host image
+as one Kubernetes Deployment. It includes a ClusterIP Service, a scoped
+namespace Role/RoleBinding, a NetworkPolicy isolating OCR Jobs, a shared data
+PVC, and a separate PVC for the SQLite job database. The data PVC must be backed by storage that can be mounted
+by both the API pod and its OCR Job pods. The example uses `ReadWriteOnce` and
+assumes the cluster has a default StorageClass; adjust its capacity and storage
+class for your cluster. With `ReadWriteOnce`, the scheduler must place the OCR
+pod where the volume is attachable.
+
+Create an API-key Secret using your secret manager, or for a quick test:
+
+```sh
+kubectl create secret generic api-host-secrets \
+  --from-literal=API_KEY="$(openssl rand -hex 32)"
+```
+
+Change the placeholder API-host image in the manifest to a release that
+includes automatic Kubernetes support. Review the release tags for both images in
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host),
+then set the `image` and `OCR_IMAGE` values in the manifest to the desired
+version or immutable digest. Apply it in the current namespace, where the
+Secret should also live:
+
+```sh
+kubectl apply -f api_host/k8s/api-host.yaml
+kubectl rollout status deployment/api-host
+kubectl port-forward service/api-host 8080:8080
+```
+
+The service account token and `KUBERNETES_SERVICE_HOST` are provided by
+Kubernetes. The API host uses them to detect the platform, read its own pod
+specification, and discover the PVC mounted at `DATA_ROOT`; it creates OCR
+Jobs in the same namespace, mounting that same claim at `/source` and
+`/destination`. It does not need a Docker socket, `DOCKER_GID`, or
+`DOCKER_DATA_ROOT` in Kubernetes. The OCR image is pulled by Kubernetes when a
+job is scheduled, so it must be available to the cluster nodes or their image
+pull credentials.
+
+The provided Role grants only the permissions needed to inspect the API pod,
+create/monitor/delete OCR Jobs, and read their pod logs. Keep this Role
+namespace-scoped. The OCR pods run as UID/GID `65532`, have no service-account
+token, mount input read-only, and have ingress/egress denied by the included
+NetworkPolicy. NetworkPolicy enforcement depends on the cluster CNI; use a
+policy-enforcing plugin to retain Docker's network-isolation behavior. Ensure
+the shared PVC and its filesystem permissions allow the API and OCR pods to
+read/write data as appropriate.
+Keep `replicas: 1`: the persistent queue and startup recovery are designed for
+one API-host process, not multiple replicas.
 
 ## Docker socket and filesystem mapping
 
@@ -120,33 +176,38 @@ under `.api-host/jobs` for the API and managed OCR containers; files left
 behind by earlier root-running OCR containers may need a targeted ownership
 repair before `scope:"uploads"` cleanup can remove them.
 
-The named `api-host-state` volume persists the SQLite job database. Back it up
-with the host data. It retains container IDs and the last 32 KiB of captured
-output per job; these diagnostics are internal and are not returned by the
-status API. At startup, jobs left in `starting` or `running` are marked
-failed because completion cannot be confirmed; their known managed containers
-are stopped and removed when Docker is reachable. Queued jobs remain queued.
-Completed OCR containers are removed after their outcome and logs are captured.
-The OCR image stores its own processing logs in the mounted destination, so
-apply retention controls to output directories as appropriate.
+The `api-host-state` Docker volume or Kubernetes PVC persists the SQLite job
+database. Back it up with the data volume. It retains Docker container IDs or
+Kubernetes Job names and the last 32 KiB of captured output per job; these
+diagnostics are internal and are not returned by the status API. At startup,
+jobs left in `starting` or `running` are marked failed because completion
+cannot be confirmed; the host stops/removes the known managed container or
+Kubernetes Job using its automatically selected backend. Queued jobs remain
+queued. Completed OCR containers/Jobs are removed after their outcome and logs
+are captured. The OCR image stores its own processing logs in the mounted
+destination, so apply retention controls to output directories as appropriate.
 
-Create the runtime environment file with the guided configurator:
+For Docker deployments, create the runtime environment file with the guided
+configurator:
 
 ```sh
 ./api_host/config/configure_api_host.sh
 ```
 
-The configurator prompts for an OCR image, API key (or generates one),
+The Docker configurator prompts for an OCR image, API key (or generates one),
 Docker-visible data root, worker settings, anonymous-access choice, and whether
 directory-based submissions are allowed. The latter defaults to `false`, so
 only uploaded archive submissions are accepted unless explicitly enabled. It
 saves the file as `api_host/env/.env` with mode `600`. The data-root directory
 is created by the configurator and made accessible to both the API and OCR
 containers. The configurator detects the socket group ID when available; the
-run launcher detects it at startup.
+run launcher detects it at startup. Kubernetes deployments use the manifest
+and Secret described above instead of this configurator.
 The selected OCR image does not need to be present locally when configuring:
-the API host checks for it when the first job starts and pulls it if needed.
-The Docker daemon must be able to reach the image registry for this first pull.
+the Docker API host checks for it when the first job starts and pulls it if
+needed. The Docker daemon must be able to reach the image registry for this
+first pull. In Kubernetes, the cluster pulls the image when it schedules the
+OCR Job.
 
 Alternatively, manually copy and edit the template:
 
