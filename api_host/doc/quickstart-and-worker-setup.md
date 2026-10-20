@@ -1,7 +1,9 @@
-# Quickstart and worker setup
+# Docker quickstart and worker setup
 
-This guide takes you from a clean checkout to a running API host that starts
-OCR containers for accepted jobs.
+This guide takes you from a clean checkout to a running Docker deployment that
+starts OCR containers for accepted jobs. For Kubernetes, use the
+[`deployment.md`](deployment.md#kubernetes-deployment) guide; the same API host
+automatically selects Kubernetes Jobs when it runs in a Kubernetes pod.
 
 ## How the worker is included
 
@@ -53,7 +55,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
-For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.1.0`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -144,11 +146,11 @@ the Docker host.
 
 Use the pre-compiled API-host image from
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Select a published release tag (the example below uses `v1.1.0`), then pull and
+Select a published release tag (the example below uses `v1.2.0`), then pull and
 start it:
 
 ```sh
-TAG=v1.1.0
+TAG=v1.2.0
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
