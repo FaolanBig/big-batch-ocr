@@ -4,11 +4,11 @@
 
 The recommended deployment uses the pre-compiled API-host image published to
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Use a published release tag; this example uses `v1.1.0`. Pull the image now,
+Use a published release tag; this example uses `v1.2.0`. Pull the image now,
 then start it after configuring the runtime environment below:
 
 ```sh
-TAG=v1.1.0
+TAG=v1.2.0
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ```
@@ -56,7 +56,7 @@ protected `.env` file:
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon; ignored in Kubernetes |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
-| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.1.0`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
+| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
 | `OCR_LANGUAGE` | No | `eng` | Default OCRmyPDF language code or `+`-separated language codes, such as `deu+eng` |
 | `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`) |
@@ -225,7 +225,7 @@ commit it.
 Start the pre-compiled image with the launcher:
 
 ```sh
-TAG=v1.1.0
+TAG=v1.2.0
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```
