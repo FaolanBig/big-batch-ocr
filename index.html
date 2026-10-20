@@ -1,0 +1,1306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="Turn document folders into searchable PDFs. Run Big Batch OCR locally or in Docker, and automate resumable OCR jobs through a Docker or Kubernetes API host."
+    >
+    <meta name="theme-color" content="#f7f8f5">
+    <title>Big Batch OCR — Searchable PDFs at batch scale</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f5f7f3;
+        --white: #fff;
+        --ink: #17221e;
+        --muted: #68736d;
+        --line: #e3e8e2;
+        --green: #236b50;
+        --green-dark: #194d3a;
+        --green-pale: #eaf2ed;
+        --green-soft: #f0f5f1;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(ellipse at 50% -12%, rgba(222, 234, 222, 0.72), transparent 43rem),
+          var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .wrap {
+        width: min(1160px, calc(100% - 48px));
+        margin-inline: auto;
+      }
+
+      .topbar {
+        display: flex;
+        min-height: 80px;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 11px;
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 650;
+        letter-spacing: -0.035em;
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 10px;
+        background: var(--green);
+        color: white;
+      }
+
+      .brand-mark svg {
+        width: 19px;
+        height: 19px;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        gap: 30px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 550;
+      }
+
+      .nav a {
+        text-decoration: none;
+        transition: color 160ms ease;
+      }
+
+      .nav a:hover,
+      .text-link:hover {
+        color: var(--green);
+      }
+
+      .nav .nav-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 10px 14px;
+        border: 1px solid #d7dfd9;
+        border-radius: 7px;
+        color: var(--ink);
+      }
+
+      .nav-cta svg {
+        width: 15px;
+        height: 15px;
+      }
+
+      .hero {
+        display: grid;
+        min-height: 552px;
+        grid-template-columns: 1.04fr 0.96fr;
+        align-items: center;
+        gap: 62px;
+        padding-block: 74px 82px;
+      }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0 0 23px;
+        color: var(--green);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before {
+        width: 19px;
+        height: 1px;
+        background: var(--green);
+        content: "";
+      }
+
+      h1 {
+        max-width: 580px;
+        margin: 0;
+        font-size: clamp(45px, 6.1vw, 72px);
+        font-weight: 560;
+        letter-spacing: -0.075em;
+        line-height: 1.02;
+      }
+
+      h1 span {
+        color: var(--green);
+      }
+
+      .hero-copy {
+        max-width: 450px;
+        margin: 23px 0 0;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.75;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 31px;
+      }
+
+      .button {
+        display: inline-flex;
+        min-height: 46px;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 0 17px;
+        border: 1px solid var(--green);
+        border-radius: 7px;
+        background: var(--green);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+      }
+
+      .button:hover {
+        transform: translateY(-1px);
+        border-color: var(--green-dark);
+        background: var(--green-dark);
+      }
+
+      .button svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .button-secondary {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--ink);
+      }
+
+      .button-secondary:hover {
+        border-color: #cbd7cf;
+        background: var(--white);
+        color: var(--ink);
+      }
+
+      .hero-note {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 25px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .hero-note svg {
+        width: 15px;
+        height: 15px;
+        color: var(--green);
+      }
+
+      .visual {
+        position: relative;
+        min-height: 360px;
+        overflow: hidden;
+        border: 1px solid #d9e4d9;
+        border-radius: 18px;
+        background:
+          radial-gradient(ellipse at 50% 0%, rgba(222, 237, 222, 0.96), transparent 63%),
+          linear-gradient(145deg, #f1f5ef, #e8efe8);
+        box-shadow: 0 24px 70px rgba(43, 73, 53, 0.08);
+      }
+
+      .tree-visual {
+        position: relative;
+        width: min(100% - 40px, 410px);
+        margin: 37px auto 0;
+      }
+
+      .tree-caption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #78857c;
+        font-family: var(--mono);
+        font-size: 9px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .tree-panels {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 22px minmax(0, 1fr);
+        align-items: center;
+        gap: 7px;
+        margin-top: 13px;
+      }
+
+      .tree-panel {
+        min-width: 0;
+        min-height: 228px;
+        padding: 12px 10px;
+        border: 1px solid #e0e7df;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.83);
+      }
+
+      .tree-panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #edf0ec;
+        color: #78857c;
+        font-family: var(--mono);
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      .tree-list {
+        display: grid;
+        gap: 3px;
+        margin: 9px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .tree-row {
+        display: flex;
+        min-width: 0;
+        min-height: 21px;
+        align-items: center;
+        gap: 5px;
+        color: #46534b;
+        font-family: var(--mono);
+        font-size: 8px;
+        white-space: nowrap;
+      }
+
+      .tree-row svg {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
+        color: #688674;
+      }
+
+      .tree-row.depth-1 {
+        padding-left: 12px;
+      }
+
+      .tree-row.depth-2 {
+        padding-left: 23px;
+      }
+
+      .tree-row.depth-3 {
+        padding-left: 34px;
+      }
+
+      .tree-row.file {
+        color: #344139;
+      }
+
+      .tree-row.file svg {
+        color: #85918a;
+      }
+
+      .tree-status {
+        margin-left: auto;
+        color: var(--green);
+        font-family: var(--mono);
+        font-size: 7px;
+        font-weight: 600;
+      }
+
+      .tree-arrow {
+        width: 18px;
+        height: 18px;
+        color: #7d9282;
+      }
+
+      .tree-note {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        margin-top: 16px;
+        color: #718078;
+        font-family: var(--mono);
+        font-size: 8px;
+        letter-spacing: 0.04em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .tree-note svg {
+        width: 13px;
+        height: 13px;
+        color: var(--green);
+      }
+
+      .feature-strip {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .feature {
+        display: flex;
+        align-items: flex-start;
+        gap: 13px;
+        padding: 24px 22px 24px 0;
+      }
+
+      .feature + .feature {
+        padding-left: 24px;
+        border-left: 1px solid var(--line);
+      }
+
+      .feature svg {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        color: var(--green);
+      }
+
+      .feature strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .feature span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .modes {
+        padding-block: 102px 108px;
+        scroll-margin-top: 30px;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 30px;
+        margin-bottom: 32px;
+      }
+
+      .section-heading .eyebrow {
+        margin-bottom: 14px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 43px);
+        font-weight: 550;
+        letter-spacing: -0.06em;
+      }
+
+      .section-intro {
+        max-width: 330px;
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .mode-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .mode-card {
+        display: flex;
+        min-height: 306px;
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 23px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: 0 10px 28px rgba(27, 55, 39, 0.025);
+        transition: border-color 160ms ease, transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+      }
+
+      .mode-card:hover {
+        transform: translateY(-3px);
+        border-color: #cbd9cf;
+        background: var(--white);
+        box-shadow: 0 16px 36px rgba(27, 55, 39, 0.08);
+      }
+
+      .mode-icon {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        margin-bottom: 26px;
+        border: 1px solid #dfe9e1;
+        border-radius: 8px;
+        background: var(--green-pale);
+        color: var(--green);
+      }
+
+      .mode-icon svg {
+        width: 19px;
+        height: 19px;
+      }
+
+      .mode-num {
+        margin: 0 0 8px;
+        color: #849088;
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 620;
+        letter-spacing: -0.035em;
+      }
+
+      .mode-card > p:not(.mode-num) {
+        margin: 10px 0 21px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+
+      .text-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: auto;
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 650;
+        text-decoration: none;
+        transition: color 160ms ease;
+      }
+
+      .text-link svg {
+        width: 14px;
+        height: 14px;
+        transition: transform 160ms ease;
+      }
+
+      .text-link:hover svg {
+        transform: translateX(3px);
+      }
+
+      .bottom-cta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 28px;
+        padding: 31px 34px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        background:
+          radial-gradient(ellipse at 85% 0%, rgba(99, 143, 112, 0.25), transparent 50%),
+          #1d382d;
+        color: white;
+      }
+
+      .bottom-cta p {
+        margin: 7px 0 0;
+        color: #c1d0c5;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .bottom-cta h2 {
+        font-size: 24px;
+        letter-spacing: -0.045em;
+      }
+
+      .bottom-cta .button {
+        flex: 0 0 auto;
+        border-color: #e3eee6;
+        background: #e3eee6;
+        color: #1d382d;
+      }
+
+      .bottom-cta .button:hover {
+        border-color: white;
+        background: white;
+      }
+
+      .api-section {
+        margin-bottom: 76px;
+        padding: 34px;
+        border: 1px solid #dce7de;
+        border-radius: 18px;
+        background:
+          radial-gradient(ellipse at 100% 0%, rgba(218, 234, 221, 0.7), transparent 45%),
+          var(--green-soft);
+        scroll-margin-top: 30px;
+      }
+
+      .api-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 30px;
+        margin-bottom: 27px;
+      }
+
+      .api-heading .eyebrow {
+        margin-bottom: 13px;
+      }
+
+      .api-heading h2 {
+        max-width: 580px;
+      }
+
+      .api-heading > p {
+        max-width: 365px;
+        margin: 0 0 3px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .api-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .api-card {
+        min-height: 178px;
+        padding: 20px;
+        border: 1px solid rgba(211, 224, 214, 0.9);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .api-card svg {
+        width: 20px;
+        height: 20px;
+        margin-bottom: 17px;
+        color: var(--green);
+      }
+
+      .api-card h3 {
+        font-size: 14px;
+      }
+
+      .api-card p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.65;
+      }
+
+      .api-card code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+
+      .runtime-note {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 13px;
+        padding: 14px 17px;
+        border-radius: 10px;
+        background: #e3ede5;
+        color: #42594a;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .runtime-note strong {
+        color: var(--green-dark);
+      }
+
+      .runtime-note svg {
+        width: 19px;
+        height: 19px;
+        flex: 0 0 auto;
+        color: var(--green);
+      }
+
+      footer {
+        display: flex;
+        min-height: 95px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        margin-top: 76px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .footer-brand {
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+      }
+
+      .footer-links {
+        display: flex;
+        gap: 21px;
+      }
+
+      .footer-links a {
+        text-decoration: none;
+      }
+
+      .footer-links a:hover {
+        color: var(--green);
+      }
+
+      :focus-visible {
+        outline: 3px solid #75a989;
+        outline-offset: 3px;
+      }
+
+      @media (max-width: 800px) {
+        .hero {
+          min-height: 0;
+          grid-template-columns: 1fr 0.88fr;
+          gap: 28px;
+          padding-block: 65px;
+        }
+
+        .visual {
+          min-height: 325px;
+        }
+
+        .tree-visual {
+          width: min(100% - 32px, 410px);
+        }
+
+        .feature-strip {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .feature:nth-child(3) {
+          padding-left: 0;
+          border-left: 0;
+        }
+
+        .feature:nth-child(n + 3) {
+          border-top: 1px solid var(--line);
+        }
+
+        .feature {
+          padding-right: 12px;
+        }
+
+        .feature + .feature {
+          padding-left: 14px;
+        }
+
+        .feature:nth-child(3) {
+          padding-left: 0;
+        }
+
+        .mode-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .mode-card {
+          min-height: 282px;
+        }
+
+        .api-heading {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .api-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        .wrap {
+          width: min(100% - 36px, 480px);
+        }
+
+        .topbar {
+          min-height: 68px;
+        }
+
+        .brand {
+          gap: 8px;
+          font-size: 13px;
+          white-space: nowrap;
+        }
+
+        .nav {
+          gap: 8px;
+        }
+
+        .nav > a:first-child {
+          display: none;
+        }
+
+        .nav > a[href="#api-workflows"] {
+          font-size: 10px;
+          white-space: nowrap;
+        }
+
+        .nav .nav-cta {
+          gap: 5px;
+          padding: 7px 8px;
+          font-size: 10px;
+          white-space: nowrap;
+        }
+
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 38px;
+          padding-block: 58px 43px;
+        }
+
+        h1 {
+          max-width: 440px;
+          font-size: clamp(47px, 13vw, 65px);
+        }
+
+        .hero-copy {
+          font-size: 14px;
+        }
+
+        .visual {
+          min-height: 320px;
+        }
+
+        .tree-visual {
+          width: min(100% - 28px, 410px);
+          margin-top: 31px;
+        }
+
+        .tree-panels {
+          grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr);
+          gap: 4px;
+        }
+
+        .tree-panel {
+          min-height: 218px;
+          padding-inline: 7px;
+        }
+
+        .tree-row.depth-1 {
+          padding-left: 8px;
+        }
+
+        .tree-row.depth-2 {
+          padding-left: 16px;
+        }
+
+        .tree-row.depth-3 {
+          padding-left: 24px;
+        }
+
+        .tree-row {
+          gap: 3px;
+          font-size: 7px;
+        }
+
+        .tree-status {
+          font-size: 6px;
+        }
+
+        .feature-strip {
+          grid-template-columns: 1fr;
+          padding-block: 9px;
+        }
+
+        .feature,
+        .feature + .feature,
+        .feature:nth-child(3) {
+          padding: 13px 0;
+          border: 0;
+        }
+
+        .feature:nth-child(n + 2) {
+          border-top: 1px solid var(--line);
+        }
+
+        .modes {
+          padding-block: 72px;
+        }
+
+        .section-heading {
+          display: block;
+          margin-bottom: 24px;
+        }
+
+        .section-intro {
+          margin-top: 14px;
+        }
+
+        .mode-grid {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .mode-card {
+          min-height: 0;
+          padding: 20px;
+        }
+
+        .mode-icon {
+          margin-bottom: 19px;
+        }
+
+        .mode-card > p:not(.mode-num) {
+          margin-bottom: 17px;
+        }
+
+        .api-section {
+          margin-bottom: 54px;
+          padding: 23px 18px;
+          border-radius: 14px;
+        }
+
+        .api-heading {
+          margin-bottom: 20px;
+        }
+
+        .api-grid {
+          grid-template-columns: 1fr;
+          gap: 9px;
+        }
+
+        .api-card {
+          min-height: 0;
+        }
+
+        .runtime-note {
+          align-items: flex-start;
+        }
+
+        .bottom-cta {
+          display: block;
+          padding: 26px 22px;
+        }
+
+        .bottom-cta .button {
+          margin-top: 21px;
+        }
+
+        footer {
+          flex-wrap: wrap;
+          justify-content: flex-start;
+          margin-top: 56px;
+          padding-block: 22px;
+        }
+
+        .footer-brand {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="topbar">
+        <a class="brand" href="https://github.com/FaolanBig/big-batch-ocr" aria-label="Big Batch OCR on GitHub">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 3.75h7l4 4v12.5H7z"></path>
+              <path d="M14 3.75v4h4M9.5 12h6M9.5 15.5h6"></path>
+            </svg>
+          </span>
+          <span>Big Batch OCR</span>
+        </a>
+        <nav class="nav" aria-label="Main navigation">
+          <a href="#ways-to-run">Ways to run</a>
+          <a href="#api-workflows">API &amp; Kubernetes</a>
+          <a class="nav-cta" href="https://github.com/FaolanBig/big-batch-ocr">
+            View on GitHub
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 4h6v6M20 4l-9 9"></path>
+              <path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"></path>
+            </svg>
+          </a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div>
+            <p class="eyebrow">Open-source document processing</p>
+            <h1 id="hero-title">A clearer way to process <span>every page.</span></h1>
+            <p class="hero-copy">
+              Turn whole document folders into searchable PDFs without losing
+              their structure. Run OCR locally or in Docker, then scale
+              automated processing with a job API that works on Docker and
+              Kubernetes.
+            </p>
+            <div class="actions">
+              <a class="button" href="#ways-to-run">
+                Find your workflow
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M5 12h14M13 6l6 6-6 6"></path>
+                </svg>
+              </a>
+              <a class="button button-secondary" href="https://github.com/FaolanBig/big-batch-ocr">Browse the source</a>
+            </div>
+            <p class="hero-note">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m5 12 4 4L19 6"></path>
+              </svg>
+              Resume after interruptions without reprocessing completed PDFs
+            </p>
+          </div>
+
+          <div class="visual" role="img" aria-label="Example folder structure showing nested input folders preserved in the output, with PDFs made searchable and other files copied.">
+            <div class="tree-visual" aria-hidden="true">
+              <div class="tree-caption">
+                <span>One folder tree, preserved</span>
+                <span>Example</span>
+              </div>
+              <div class="tree-panels">
+                <div class="tree-panel">
+                  <div class="tree-panel-head"><span>INPUT</span><span>01</span></div>
+                  <ul class="tree-list">
+                    <li class="tree-row">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      archive/
+                    </li>
+                    <li class="tree-row depth-1">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      2026/
+                    </li>
+                    <li class="tree-row depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      invoices/
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      invoice-01.pdf
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      invoice-02.pdf
+                    </li>
+                    <li class="tree-row depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      contracts/
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      signed.pdf
+                    </li>
+                    <li class="tree-row file depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      reference.csv
+                    </li>
+                  </ul>
+                </div>
+                <svg class="tree-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15m-6-6 6 6-6 6"></path></svg>
+                <div class="tree-panel">
+                  <div class="tree-panel-head"><span>OUTPUT</span><span>02</span></div>
+                  <ul class="tree-list">
+                    <li class="tree-row">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      archive/
+                    </li>
+                    <li class="tree-row depth-1">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      2026/
+                    </li>
+                    <li class="tree-row depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      invoices/
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      invoice-01.pdf
+                      <span class="tree-status">OCR</span>
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      invoice-02.pdf
+                      <span class="tree-status">OCR</span>
+                    </li>
+                    <li class="tree-row depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5h7l2 2h8v10h-17z"></path></svg>
+                      contracts/
+                    </li>
+                    <li class="tree-row file depth-3">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      signed.pdf
+                      <span class="tree-status">OCR</span>
+                    </li>
+                    <li class="tree-row file depth-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4"></path></svg>
+                      reference.csv
+                      <span class="tree-status">COPY</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <div class="tree-note">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.5 9a7 7 0 0 1 11.8-2L20 12M4 12l2.7 5a7 7 0 0 0 11.8-2"></path></svg>
+                Resume safely · verified PDFs are skipped
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="feature-strip" id="features" aria-label="Project highlights">
+          <div class="feature">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 5h16v14H4zM8 9h8M8 12h8M8 15h5"></path>
+            </svg>
+            <div>
+              <strong>Whole-folder batches</strong>
+              <span>Built for huge collections and complex trees, from deep archives to small batches.</span>
+            </div>
+          </div>
+          <div class="feature">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3.5v4m0 9v4M3.5 12h4m9 0h4M5.99 5.99l2.83 2.83m6.36 6.36 2.83 2.83m0-12.02-2.83 2.83m-6.36 6.36-2.83 2.83"></path>
+              <circle cx="12" cy="12" r="3.5"></circle>
+            </svg>
+            <div>
+              <strong>Practical OCR</strong>
+              <span>Deskew, rotate, clean, and optimize with OCRmyPDF.</span>
+            </div>
+          </div>
+          <div class="feature">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M20 7v5h-5M4 17v-5h5"></path>
+              <path d="M5.5 9a7 7 0 0 1 11.8-2L20 12M4 12l2.7 5a7 7 0 0 0 11.8-2"></path>
+            </svg>
+            <div>
+              <strong>Resumable by design</strong>
+              <span>After an interruption or failure, resume where you left off; verified completed PDFs are skipped.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="modes" id="ways-to-run" aria-labelledby="modes-title">
+          <div class="section-heading">
+            <div>
+                <p class="eyebrow">From laptop to cluster</p>
+                <h2 id="modes-title">Run it your way.</h2>
+            </div>
+            <p class="section-intro">
+                Start with a local folder, use a container, or run managed OCR
+                jobs through the API.
+            </p>
+          </div>
+          <div class="mode-grid">
+            <article class="mode-card">
+              <span class="mode-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m8 9-4 3 4 3m8-6 4 3-4 3m-2-9-4 12"></path>
+                </svg>
+              </span>
+              <p class="mode-num">01 / LOCAL</p>
+              <h3>Run in your terminal</h3>
+              <p>
+                Process folders directly on Linux with the Bash script or
+                compiled binary. Follow progress as each file is handled.
+              </p>
+              <a class="text-link" href="https://github.com/FaolanBig/big-batch-ocr/blob/main/ocr_batcher/README.md">
+                Read the batcher guide
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg>
+              </a>
+            </article>
+
+            <article class="mode-card">
+              <span class="mode-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 7.5h16v11H4zM8 4.5h8M8 10.5h8m-8 4h5"></path>
+                </svg>
+              </span>
+              <p class="mode-num">02 / CONTAINER</p>
+              <h3>Run with Docker</h3>
+              <p>
+                Use the published container for a consistent setup without
+                installing OCR tools on your host machine.
+              </p>
+              <a class="text-link" href="https://github.com/FaolanBig/big-batch-ocr/blob/main/ocr_batcher/doc/run_with_docker.md">
+                See Docker instructions
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg>
+              </a>
+            </article>
+
+            <article class="mode-card">
+              <span class="mode-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 5 3.5 12 8 19M16 5l4.5 7-4.5 7M14 3l-4 18"></path>
+                </svg>
+              </span>
+              <p class="mode-num">03 / API + DOCKER</p>
+              <h3>Automate with Docker</h3>
+              <p>
+                Run the API host with Docker Engine. Submit authenticated jobs,
+                track progress, and download processed result archives.
+              </p>
+              <a class="text-link" href="https://github.com/FaolanBig/big-batch-ocr/blob/main/api_host/doc/quickstart-and-worker-setup.md">
+                Explore the API guide
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg>
+              </a>
+            </article>
+
+            <article class="mode-card">
+              <span class="mode-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="5" r="2"></circle>
+                  <circle cx="6" cy="18" r="2"></circle>
+                  <circle cx="18" cy="18" r="2"></circle>
+                  <path d="M12 7v4m0 0-6 5m6-5 6 5M8 18h8"></path>
+                </svg>
+              </span>
+              <p class="mode-num">04 / API + KUBERNETES</p>
+              <h3>Scale on Kubernetes</h3>
+              <p>
+                Deploy the API host in your cluster. OCR work runs as Kubernetes
+                Jobs against shared persistent storage.
+              </p>
+              <a class="text-link" href="https://github.com/FaolanBig/big-batch-ocr/blob/main/api_host/doc/deployment.md#kubernetes-deployment">
+                See Kubernetes setup
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"></path></svg>
+              </a>
+            </article>
+          </div>
+        </section>
+
+        <section class="api-section" id="api-workflows" aria-labelledby="api-title">
+          <div class="api-heading">
+            <div>
+              <p class="eyebrow">More than a processing endpoint</p>
+              <h2 id="api-title">A job API built for the whole workflow.</h2>
+            </div>
+            <p>
+              Connect existing tools and services to a consistent API for
+              submitting, tracking, and retrieving batch OCR work.
+            </p>
+          </div>
+          <div class="api-grid">
+            <article class="api-card">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 7.5h16v12H4zM8 4.5h8M8 11h8m-8 4h5"></path>
+              </svg>
+              <h3>Submit the way that fits</h3>
+              <p>
+                Upload a <code>.tar.gz</code> archive for an isolated job
+                workspace, or process directories on your shared data volume.
+              </p>
+            </article>
+            <article class="api-card">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.5"></circle>
+                <path d="M12 7v5l3 2M4 4l2 2"></path>
+              </svg>
+              <h3>Keep jobs moving</h3>
+              <p>
+                Choose synchronous or asynchronous requests. Check status,
+                cancel active work, and resume failed or cancelled jobs.
+              </p>
+            </article>
+            <article class="api-card">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3 5 6v5c0 4.8 2.8 8.2 7 10 4.2-1.8 7-5.2 7-10V6z"></path>
+                <path d="m9 12 2 2 4-4"></path>
+              </svg>
+              <h3>Control access and throughput</h3>
+              <p>
+                Bearer-key authentication, configurable job concurrency, and
+                per-job OCR language and optimization settings.
+              </p>
+            </article>
+          </div>
+          <div class="runtime-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 7h16M4 17h16M7 4v6m10 4v6"></path>
+              <circle cx="7" cy="13" r="2"></circle>
+              <circle cx="17" cy="11" r="2"></circle>
+            </svg>
+            <span><strong>One API host, two runtimes.</strong> It detects Kubernetes in-cluster and starts OCR as Kubernetes Jobs; outside the cluster, it uses Docker Engine. No platform switch in your API requests.</span>
+          </div>
+        </section>
+
+        <section class="bottom-cta" aria-labelledby="cta-title">
+          <div>
+            <h2 id="cta-title">Ready to make a batch searchable?</h2>
+            <p>Explore the code, read the setup guide, or pick the workflow that fits.</p>
+          </div>
+          <a class="button" href="https://github.com/FaolanBig/big-batch-ocr">
+            Visit the GitHub repository
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 4h6v6M20 4l-9 9"></path>
+              <path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"></path>
+            </svg>
+          </a>
+        </section>
+      </main>
+
+      <footer>
+        <span class="footer-brand">Big Batch OCR</span>
+        <span>© Carl Öttinger 2026</span>
+        <nav class="footer-links" aria-label="Footer navigation">
+          <a href="https://github.com/FaolanBig/big-batch-ocr">GitHub</a>
+          <a href="https://github.com/FaolanBig/big-batch-ocr/blob/main/LICENSE">AGPL-3.0</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>
