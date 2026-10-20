@@ -376,7 +376,7 @@
 
       .feature-strip {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         border-top: 1px solid var(--line);
         border-bottom: 1px solid var(--line);
       }
@@ -724,8 +724,10 @@
         }
 
         .feature:nth-child(3) {
+          grid-column: 1 / -1;
           padding-left: 0;
           border-left: 0;
+          border-top: 1px solid var(--line);
         }
 
         .feature:nth-child(n + 3) {
@@ -861,6 +863,7 @@
         .feature,
         .feature + .feature,
         .feature:nth-child(3) {
+          grid-column: auto;
           padding: 13px 0;
           border: 0;
         }
