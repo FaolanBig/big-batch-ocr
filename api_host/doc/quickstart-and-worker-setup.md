@@ -1,7 +1,9 @@
-# Quickstart and worker setup
+# Docker quickstart and worker setup
 
-This guide takes you from a clean checkout to a running API host that starts
-OCR containers for accepted jobs.
+This guide takes you from a clean checkout to a running Docker deployment that
+starts OCR containers for accepted jobs. For Kubernetes, use the
+[`deployment.md`](deployment.md#kubernetes-deployment) guide; the same API host
+automatically selects Kubernetes Jobs when it runs in a Kubernetes pod.
 
 ## How the worker is included
 
@@ -19,6 +21,9 @@ resource use: as a first estimate, plan for up to
 `MAX_CONCURRENT_JOBS * OCR_JOBS` OCR threads, plus memory and CPU used by
 scanning and processing individual documents. Start with one concurrent job
 and three OCR threads, monitor the host, and adjust deliberately.
+The API host's `OCR_LANGUAGE` and `OCR_OPTIMIZE` settings provide defaults
+(`eng` and `3`); each job may override them with validated `language` and
+`optimize` fields.
 
 Run one API-host instance against its database. Do not scale this Compose
 service to multiple replicas or run multiple API hosts against one database:
@@ -49,8 +54,8 @@ docker compose version
 
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
-OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr).
-For example, `ghcr.io/faolanbig/big-batch-ocr:v1.0.0`; replace this with a
+OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
+For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -63,9 +68,13 @@ Do not point it at a path that is available only inside the API container.
 When you use the configurator in step 3, it creates the selected data-root
 directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
 OCR containers. You do not need to create the root manually. To use the
-shared-directory submission method, create the input/output subdirectories
-inside that root and put source files in the input directory. This is not
-needed for archive uploads: the API creates an isolated per-job workspace.
+shared-directory submission method, enable directory-based submissions in the
+configurator, then create the input/output subdirectories inside that root and
+put source files in the input directory. Directory submissions are disabled
+by default. For security, keep them disabled and submit input as `.tar.gz`
+archives through the API; each archive gets an isolated per-job workspace.
+Enable shared-directory submissions only for trusted callers when they are
+specifically needed.
 
 ### 3. Configure runtime credentials
 
@@ -76,9 +85,12 @@ Create the runtime environment file with the interactive configurator:
 ```
 
 The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, and worker settings, creates the data-root directory with
-permissions for the containers, then saves `api_host/env/.env` with mode
-`600`. Enter the image and data-root values selected in step 2.
+Docker data root, worker settings, and whether directory-based submissions
+should be allowed. That option defaults to disabled, so use archive uploads
+unless you explicitly opt in to directory submissions. The script creates the
+data-root directory with permissions for the containers, then saves
+`api_host/env/.env` with mode `600`. Enter the image and data-root values
+selected in step 2.
 For the shared-directory example later in this guide, create its child
 directories after configuration (replace the root if you selected a different
 one):
@@ -88,6 +100,16 @@ sudo install -d -m 0750 -o 65532 -g 65532 \
   /srv/big-batch-ocr-data/incoming/sample \
   /srv/big-batch-ocr-data/processed
 ```
+
+The API host and managed OCR containers run as UID/GID `65532`. If you later
+use `POST /api/v1/jobs/cleanup` with `{"scope":"all"}`, that user must have
+write and execute permission on each shared job directory's parent to remove
+the directory, and on directories inside it to remove their contents. For
+example, owning `incoming/sample` does not let the API delete it if
+`incoming` is owned by root and is not writable by UID/GID `65532`. See
+[`deployment.md`](deployment.md#docker-socket-and-filesystem-mapping) for a
+targeted permission-repair example. Avoid recursively changing permissions on
+the whole data root.
 
 Skip this for archive uploads; they do not require pre-created input or output
 directories.
@@ -120,10 +142,22 @@ resolve access through your host's Docker administration policy. Do not make
 the socket world-writable. Granting socket access grants broad control over
 the Docker host.
 
-### 4. Build and start the API host
+### 4. Start the API host
 
-From the repository root, choose the standard build or the corporate proxy
-build:
+Use the pre-compiled API-host image from
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
+Select a published release tag (the example below uses `v1.2.0`), then pull and
+start it:
+
+```sh
+TAG=v1.2.0
+API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
+sudo docker pull "$API_IMAGE"
+./api_host/run/run_container.sh "$API_IMAGE"
+```
+
+To compile the API host yourself instead, run either build script from the
+repository root:
 
 ```sh
 # Standard build; does not pass a CA certificate secret.
@@ -199,7 +233,7 @@ response="$(
   curl --fail-with-body --silent --show-error \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true}' \
+    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
     http://127.0.0.1:8080/api/v1/jobs
 )"
 printf '%s\n' "$response" | jq .
@@ -230,9 +264,11 @@ and `exitCode` fields. Do not resubmit just because a client times out or
 disconnects after acceptance.
 
 For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
-up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns a
-terminal result or a `504` containing the accepted job ID and status URL. The
-job is not cancelled at the wait limit; poll its status URL.
+up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
+the processed `.tar.gz` archive (with the job ID in the `X-Job-ID` header) or a
+`504` containing the accepted job ID and status URL. The job is not cancelled
+at the wait limit; poll its status URL and download its result after it
+succeeds.
 
 Instead of placing input files on the shared data volume manually, upload a
 `.tar.gz` archive as multipart form data. Set `mode`; do not set `inputPath` or
@@ -254,6 +290,11 @@ job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
 status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
+The `language` and `optimize` fields are optional. `language` accepts one or
+more installed OCRmyPDF/Tesseract language codes joined by `+`; `optimize` is
+an integer from `0` to `3`. Omitted fields use the server defaults. Unknown
+OCR command arguments cannot be supplied.
+
 The archive request body is limited to 1 GiB and its extracted contents to
 10 GiB. Archive entries must be files or directories; links and paths that
 escape the archive are rejected. The existing JSON request with `inputPath`
@@ -270,11 +311,15 @@ curl --fail-with-body --silent --show-error \
   -o "result-${job_id}.tar.gz"
 ```
 
-The result is generated from the job's output directory when requested. The
-job-specific workspace, including its extracted input, is removed after the
-download succeeds. A later download attempt for that uploaded job returns
-`410 JOB_RESULT_CONSUMED`. For jobs submitted with the original `inputPath`
-JSON request, result downloads do not remove the shared output directory.
+The result is generated from the job's output directory when requested.
+Downloading does not remove the job-specific workspace or its extracted
+input; the result can be downloaded again later. Remove uploaded-job data
+explicitly with `DELETE /api/v1/jobs/${job_id}` after the job is terminal, or
+use `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to delete all
+terminal uploaded jobs. Cancelling a job also preserves its workspace until
+explicit cleanup. For jobs submitted with the original `inputPath` JSON
+request, result downloads do not remove the shared output directory, and
+deleting the job record does not remove shared input/output directories.
 
 ### 6. Monitor and stop the service
 
@@ -316,7 +361,7 @@ sudo docker run -d --name api-host --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/big-batch-ocr-data:/data:rw \
   -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:testing
+  big-batch-ocr-api-host:direct
 ```
 
 This configures two in-process queue workers, with each OCR container using

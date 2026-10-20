@@ -8,15 +8,25 @@ Use either the Bash script at `src/ocr_sequencial.sh` or the compiled binary at 
 
 `src/ocr.sh` is deprecated and should no longer be used. Use `ocr_sequencial.sh` or the `ocr_sequencial` binary instead; they provide a more modern and robust workflow, including safe output publishing and resumable PDF processing.
 
+For bare-metal installation of the Bash script's dependencies on Debian/Ubuntu, openSUSE, Fedora, RHEL, or Arch Linux, run [`dependencies/install_dependencies.sh`](dependencies/install_dependencies.sh). See [`dependencies/README.md`](dependencies/README.md) for platform-specific notes and the package, license, and copyright details.
+
 `ocr_sequencial.sh` recursively processes a source directory and writes results to a target directory, preserving the directory structure. Non-PDF files are copied; PDF files are processed one at a time with OCRmyPDF.
 
 ## Docker
 
-Prebuilt Docker images are published to [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr). See [Run OCR in Docker](doc/run_with_docker.md) for pull and run instructions.
+Prebuilt Docker images are published to [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial). See [Run OCR in Docker](doc/run_with_docker.md) for pull and run instructions.
 
 ## Quick Start
 
-Requirements: Bash, OCRmyPDF and its required OCR tools, and `tmux`. The usual GNU/Linux utilities `find`, `realpath`, `sha256sum`, `cmp`, `mktemp`, `cp`, `mv`, and `tail` must also be available. At startup, the script explicitly checks for `ocrmypdf`, `tmux`, `realpath`, `sha256sum`, and `cmp`.
+On startup, the bare-metal Bash script checks its required commands and
+asks before running [`dependencies/install_dependencies.sh`](dependencies/install_dependencies.sh)
+if any are missing. The installer detects the Linux distribution and uses the
+appropriate package manager for Debian/Ubuntu, openSUSE, Fedora, RHEL, or Arch.
+Package installation may require administrator privileges; on Arch, run the
+script as a regular user with `sudo` configured so the AUR package is not built
+as root. If you decline, install dependencies manually before retrying. See
+[`dependencies/README.md`](dependencies/README.md) for platform requirements
+and license/copyright information.
 
 To build the binary from the Bash script, install `shc` and run:
 
@@ -54,7 +64,28 @@ You can optionally set the number of OCRmyPDF worker threads. The default is 3/4
 OCR_JOBS=4 bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 ```
 
-`OCR_JOBS` must be a positive integer. Files are processed sequentially, but OCRmyPDF can use multiple threads internally according to this setting.
+The language and image optimization level are also configurable. CLI options
+override their corresponding environment variables:
+
+```bash
+bash src/ocr_sequencial.sh \
+  --language deu+eng \
+  --optimize 2 \
+  "/path/to/source" "/path/to/target"
+```
+
+`--language` (or `-l`) accepts one or more OCRmyPDF/Tesseract language codes
+joined with `+`; `--optimize` accepts only levels `0` through `3`. The
+equivalent `OCR_LANGUAGE` and `OCR_OPTIMIZE` environment variables default to
+`eng` and `3`. Languages must be installed in the OCRmyPDF environment. These
+are the only configurable OCRmyPDF options; processing flags such as rotation,
+deskew, cleanup, output type, and skipping existing text remain fixed. Invalid
+values and unknown command-line options are rejected. The selected language
+and optimization level are included in resume markers, so changing either
+causes completed PDFs to be reprocessed.
+
+`OCR_JOBS` must be a positive integer. Files are processed sequentially, but
+OCRmyPDF can use multiple threads internally according to this setting.
 
 ## Directories and Limitations
 
@@ -83,7 +114,8 @@ PDF files are processed one at a time. For each file, the script runs OCRmyPDF w
 
 - `--rotate-pages` and `--deskew` correct page orientation and skew.
 - `--clean` and `--clean-final` clean page images, including in the final document.
-- `--optimize 3` enables optimization level 3.
+- `--language` uses the configured `OCR_LANGUAGE` value (default `eng`).
+- `--optimize` uses the configured `OCR_OPTIMIZE` level (default `3`).
 - `--output-type pdf` specifies the output format.
 - `--skip-text` skips pages that already contain text.
 - `--jobs` uses the positive-integer value of `OCR_JOBS` when provided; otherwise, it defaults to 3/4 of the logical CPU count reported by `nproc --all`.

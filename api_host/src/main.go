@@ -62,6 +62,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	logger.Info("selected OCR runtime automatically", "platform", cfg.RuntimePlatform)
 	store, err := OpenJobStore(cfg.DatabasePath)
 	if err != nil {
 		return err
@@ -71,13 +72,13 @@ func run(logger *slog.Logger) error {
 			logger.Error("close job database", "error", err)
 		}
 	}()
-	executor, err := NewDockerExecutor(cfg.OCRImage, cfg.OCRJobs, logger)
+	executor, err := NewRuntimeExecutor(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err := executor.Close(); err != nil {
-			logger.Error("close Docker Engine client", "error", err)
+			logger.Error("close OCR execution client", "error", err)
 		}
 	}()
 	interrupted, err := store.InterruptedContainerIDs()

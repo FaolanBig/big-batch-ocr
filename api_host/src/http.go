@@ -14,17 +14,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxRequestBytes int64 = 1 << 30
 
 type API struct {
-	config Config
-	jobs   *JobService
-	store  *JobStore
-	logger *slog.Logger
-	mux    *http.ServeMux
+	config      Config
+	jobs        *JobService
+	store       *JobStore
+	logger      *slog.Logger
+	mux         *http.ServeMux
+	maintenance sync.RWMutex
 }
 
 type submitRequest struct {
@@ -32,6 +34,10 @@ type submitRequest struct {
 	OutputPath             string          `json:"outputPath"`
 	Mode                   string          `json:"mode"`
 	CreateDestination      json.RawMessage `json:"createDestination"`
+	LanguageValue          json.RawMessage `json:"language"`
+	OptimizeValue          json.RawMessage `json:"optimize"`
+	Language               *string         `json:"-"`
+	Optimize               *int            `json:"-"`
 	CreateDestinationValue bool            `json:"-"`
 }
 
@@ -39,6 +45,19 @@ type acknowledgement struct {
 	JobID     string `json:"jobId"`
 	Status    string `json:"status"`
 	StatusURL string `json:"statusUrl"`
+}
+
+type cleanupRequest struct {
+	Scope string `json:"scope"`
+}
+
+type cleanupResult struct {
+	Scope                     string `json:"scope"`
+	JobsDeleted               int    `json:"jobsDeleted"`
+	ActiveJobsSkipped         int    `json:"activeJobsSkipped"`
+	JobsSkippedForActiveData  int    `json:"jobsSkippedForActiveData"`
+	JobsSkippedForServerData  int    `json:"jobsSkippedForServerData"`
+	JobsSkippedForUnsafePaths int    `json:"jobsSkippedForUnsafePaths"`
 }
 
 type problem struct {
@@ -57,7 +76,11 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 	api := &API{config: config, jobs: jobs, store: store, logger: logger, mux: http.NewServeMux()}
 	api.mux.HandleFunc("GET /health", api.health)
 	api.mux.Handle("POST /api/v1/jobs", api.authenticate(http.HandlerFunc(api.submit)))
+	api.mux.Handle("POST /api/v1/jobs/cleanup", api.authenticate(http.HandlerFunc(api.cleanupJobs)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.getJob)))
+	api.mux.Handle("DELETE /api/v1/jobs/{jobId}", api.authenticate(http.HandlerFunc(api.deleteJob)))
+	api.mux.Handle("POST /api/v1/jobs/{jobId}/cancel", api.authenticate(http.HandlerFunc(api.cancelJob)))
+	api.mux.Handle("POST /api/v1/jobs/{jobId}/resume", api.authenticate(http.HandlerFunc(api.resumeJob)))
 	api.mux.Handle("GET /api/v1/jobs/{jobId}/result", api.authenticate(http.HandlerFunc(api.getJobResult)))
 	return api
 }
@@ -90,6 +113,8 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) submit(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
 	request, archive, err := parseSubmitRequest(w, r)
 	if r.MultipartForm != nil {
 		defer r.MultipartForm.RemoveAll()
@@ -103,6 +128,28 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 		}
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
+		return
+	}
+	options := OCROptions{Language: a.config.OCRLanguage, Optimize: a.config.OCROptimize}
+	if request.Language != nil {
+		options.Language, err = validateOCRLanguage(*request.Language)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid OCR options", "INVALID_OCR_OPTIONS",
+				"language must contain valid OCR language codes separated by '+'.")
+			return
+		}
+	}
+	if request.Optimize != nil {
+		options.Optimize, err = validateOCROptimize(*request.Optimize)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid OCR options", "INVALID_OCR_OPTIONS",
+				"optimize must be an integer from 0 to 3.")
+			return
+		}
+	}
+	if archive == nil && !a.config.AllowDirectoryAccess {
+		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
+			"Directory-based submissions are disabled; upload an inputArchive instead.")
 		return
 	}
 	var uploadDirectory string
@@ -159,8 +206,8 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			"The request body is not valid for this operation.")
 		return
 	}
-	paths, err := ValidatePaths(a.config.DataRoot, a.config.DockerDataRoot,
-		request.InputPath, request.OutputPath, request.CreateDestinationValue)
+	paths, err := validatePaths(a.config.DataRoot, a.config.DockerDataRoot,
+		request.InputPath, request.OutputPath, request.CreateDestinationValue, uploadedJobID != "")
 	if errors.Is(err, ErrPathConflict) {
 		writeProblem(w, http.StatusConflict, "Incompatible directories", "INCOMPATIBLE_PATHS",
 			"Input and destination directories must be distinct and must not contain one another.")
@@ -173,9 +220,9 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	var job Job
 	if uploadedJobID != "" {
-		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+		job, err = a.jobs.SubmitWithID(uploadedJobID, paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost, options)
 	} else {
-		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost)
+		job, err = a.jobs.Submit(paths.InputPath, paths.OutputPath, paths.InputHost, paths.OutputHost, options)
 	}
 	if err != nil {
 		a.logger.Error("could not persist OCR job", "error", err)
@@ -206,7 +253,7 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		form := r.MultipartForm
 		for key := range form.Value {
 			switch key {
-			case "inputPath", "outputPath", "mode", "createDestination":
+			case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize":
 			default:
 				return submitRequest{}, nil, errors.New("unknown multipart field")
 			}
@@ -245,6 +292,26 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 				return submitRequest{}, nil, errors.New("createDestination must be true or false")
 			}
 		}
+		var language *string
+		if _, exists := form.Value["language"]; exists {
+			value, err := multipartTextField(r, "language", false)
+			if err != nil {
+				return submitRequest{}, nil, err
+			}
+			language = &value
+		}
+		var optimize *int
+		if _, exists := form.Value["optimize"]; exists {
+			value, err := multipartTextField(r, "optimize", false)
+			if err != nil {
+				return submitRequest{}, nil, err
+			}
+			parsed, err := parseOCROptimize(value)
+			if err != nil {
+				return submitRequest{}, nil, errors.New("optimize must be an integer")
+			}
+			optimize = &parsed
+		}
 		var archive *multipart.FileHeader
 		if files := form.File["inputArchive"]; len(files) == 1 {
 			archive = files[0]
@@ -263,7 +330,7 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		}
 		return submitRequest{
 			InputPath: inputPath, OutputPath: outputPath, Mode: mode,
-			CreateDestinationValue: create,
+			CreateDestinationValue: create, Language: language, Optimize: optimize,
 		}, archive, nil
 	}
 
@@ -286,6 +353,22 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		if trimmed == "null" || json.Unmarshal(request.CreateDestination, &request.CreateDestinationValue) != nil {
 			return submitRequest{}, nil, errors.New("createDestination must be a boolean")
 		}
+	}
+	if len(request.LanguageValue) != 0 {
+		trimmed := strings.TrimSpace(string(request.LanguageValue))
+		var language string
+		if trimmed == "null" || json.Unmarshal(request.LanguageValue, &language) != nil {
+			return submitRequest{}, nil, errors.New("language must be a string")
+		}
+		request.Language = &language
+	}
+	if len(request.OptimizeValue) != 0 {
+		trimmed := strings.TrimSpace(string(request.OptimizeValue))
+		var optimize int
+		if trimmed == "null" || json.Unmarshal(request.OptimizeValue, &optimize) != nil {
+			return submitRequest{}, nil, errors.New("optimize must be an integer")
+		}
+		request.Optimize = &optimize
 	}
 	return request, nil, nil
 }
@@ -351,6 +434,9 @@ func removeUploadedJobWorkspace(dataRoot string, job Job) error {
 	}
 	for _, directory := range []string{filepath.Dir(jobsRoot), jobsRoot} {
 		info, err := os.Lstat(directory)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("inspect job workspace parent: %w", err)
 		}
@@ -359,6 +445,191 @@ func removeUploadedJobWorkspace(dataRoot string, job Job) error {
 		}
 	}
 	return os.RemoveAll(jobDirectory)
+}
+
+func resolveJobDirectory(dataRoot, requestPath string) (string, bool, error) {
+	root, err := filepath.EvalSymlinks(dataRoot)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve data root: %w", err)
+	}
+	relative, err := safeRelativePath(root, requestPath, false)
+	if err != nil {
+		return "", false, err
+	}
+	privatePath := filepath.Join(".api-host")
+	if relative == privatePath || strings.HasPrefix(relative, privatePath+string(filepath.Separator)) {
+		return "", false, errors.New("job directory points into API host private data")
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(relative))
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("resolve job directory: %w", err)
+	}
+	if !within(root, resolved) || resolved == root ||
+		resolved == filepath.Join(root, privatePath) ||
+		within(filepath.Join(root, privatePath), resolved) {
+		return "", false, errors.New("job directory is outside the removable data area")
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", false, fmt.Errorf("inspect job directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", false, errors.New("job path is no longer a directory")
+	}
+	return filepath.Clean(resolved), true, nil
+}
+
+func removeJobDirectory(dataRoot, requestPath string) error {
+	directory, exists, err := resolveJobDirectory(dataRoot, requestPath)
+	if err != nil || !exists {
+		return err
+	}
+	if err := os.RemoveAll(directory); err != nil {
+		return fmt.Errorf("remove job directory: %w", err)
+	}
+	return nil
+}
+
+func terminalJob(status string) bool {
+	return status == "succeeded" || status == "failed" || status == "cancelled"
+}
+
+func pathsOverlap(left, right string) bool {
+	return left == right || within(left, right) || within(right, left)
+}
+
+func pathContains(parent, target string) bool {
+	relative, err := filepath.Rel(parent, target)
+	return err == nil && (relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)))
+}
+
+func (a *API) cleanupJobs(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request cleanupRequest
+	if err := decoder.Decode(&request); err != nil {
+		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
+			"The cleanup scope must be `uploads` or `all`.")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
+			"The request must contain exactly one JSON object.")
+		return
+	}
+	if request.Scope != "uploads" && request.Scope != "all" {
+		writeProblem(w, http.StatusBadRequest, "Invalid cleanup scope", "INVALID_CLEANUP_SCOPE",
+			"The cleanup scope must be `uploads` or `all`.")
+		return
+	}
+
+	a.maintenance.Lock()
+	defer a.maintenance.Unlock()
+	unlock := a.jobs.LockMaintenance()
+	defer unlock()
+	allJobs, err := a.store.List()
+	if err != nil {
+		a.logger.Error("could not list OCR jobs for cleanup", "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"Job data could not be cleaned up.")
+		return
+	}
+	result := cleanupResult{Scope: request.Scope}
+	var activePaths []string
+	activePathsUnsafe := false
+	for _, job := range allJobs {
+		if terminalJob(job.Status) {
+			continue
+		}
+		result.ActiveJobsSkipped++
+		if request.Scope != "all" || isUploadedJob(job) {
+			continue
+		}
+		for _, relative := range []string{job.InputPath, job.OutputPath} {
+			directory, exists, err := resolveJobDirectory(a.config.DataRoot, relative)
+			if err != nil {
+				a.logger.Warn("could not resolve active OCR job path during cleanup; protecting shared directories", "job_id", job.ID, "error", err)
+				activePathsUnsafe = true
+				continue
+			}
+			if exists {
+				activePaths = append(activePaths, directory)
+			}
+		}
+	}
+
+	for _, job := range allJobs {
+		if !terminalJob(job.Status) || (request.Scope == "uploads" && !isUploadedJob(job)) {
+			continue
+		}
+		if request.Scope == "all" && !isUploadedJob(job) {
+			protected := activePathsUnsafe
+			serverData := false
+			unsafePath := false
+			for _, relative := range []string{job.InputPath, job.OutputPath} {
+				directory, exists, err := resolveJobDirectory(a.config.DataRoot, relative)
+				if err != nil {
+					a.logger.Warn("could not resolve terminal OCR job path during cleanup; preserving job data", "job_id", job.ID, "error", err)
+					unsafePath = true
+					continue
+				}
+				if !exists {
+					continue
+				}
+				if pathContains(directory, filepath.Clean(a.config.DatabasePath)) {
+					serverData = true
+					break
+				}
+				for _, activePath := range activePaths {
+					if pathsOverlap(directory, activePath) {
+						protected = true
+						break
+					}
+				}
+				if protected {
+					break
+				}
+			}
+			if unsafePath {
+				result.JobsSkippedForUnsafePaths++
+				continue
+			}
+			if protected {
+				result.JobsSkippedForActiveData++
+				continue
+			}
+			if serverData {
+				result.JobsSkippedForServerData++
+				continue
+			}
+			for _, relative := range []string{job.InputPath, job.OutputPath} {
+				if err := removeJobDirectory(a.config.DataRoot, relative); err != nil {
+					a.logger.Error("could not remove terminal OCR job directory", "job_id", job.ID, "error", err)
+					writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+						"Job data could not be cleaned up.")
+					return
+				}
+			}
+		} else if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
+			a.logger.Error("could not remove uploaded OCR job workspace during cleanup", "job_id", job.ID, "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"Job data could not be cleaned up.")
+			return
+		}
+		if err := a.store.DeleteTerminal(job.ID); err != nil {
+			a.logger.Error("could not delete terminal OCR job during cleanup", "job_id", job.ID, "error", err)
+			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+				"Job data could not be cleaned up.")
+			return
+		}
+		result.JobsDeleted++
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id string) {
@@ -376,17 +647,19 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 		}
 		switch job.Status {
 		case "succeeded":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"jobId": job.ID, "status": job.Status, "inputPath": job.InputPath,
-				"outputPath": job.OutputPath, "createdAt": job.CreatedAt,
-				"startedAt": job.StartedAt, "completedAt": job.CompletedAt,
-				"exitCode": job.ExitCode, "statusUrl": job.StatusURL,
-			})
+			a.writeJobResultArchive(w, job)
 			return
 		case "failed":
 			writeJSONContentType(w, http.StatusInternalServerError, problem{
 				Type: "about:blank", Title: "OCR execution failed", Status: http.StatusInternalServerError,
 				Code: "OCR_EXECUTION_FAILED", Detail: "The OCR container exited unsuccessfully.",
+				JobID: job.ID, JobStatus: job.Status, StatusURL: job.StatusURL,
+			}, "application/problem+json")
+			return
+		case "cancelled":
+			writeJSONContentType(w, http.StatusConflict, problem{
+				Type: "about:blank", Title: "OCR job cancelled", Status: http.StatusConflict,
+				Code: "JOB_CANCELLED", Detail: "The OCR job was cancelled.",
 				JobID: job.ID, JobStatus: job.Status, StatusURL: job.StatusURL,
 			}, "application/problem+json")
 			return
@@ -402,7 +675,7 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 					"The job status could not be read.")
 				return
 			}
-			if job.Status == "succeeded" || job.Status == "failed" {
+			if job.Status == "succeeded" || job.Status == "failed" || job.Status == "cancelled" {
 				continue
 			}
 			writeJSONContentType(w, http.StatusGatewayTimeout, problem{
@@ -434,7 +707,106 @@ func (a *API) getJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+func (a *API) cancelJob(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Cancel(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not cancel OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be cancelled.")
+		return
+	}
+	switch job.Status {
+	case "cancelled":
+		writeJSON(w, http.StatusOK, job)
+	case "cancelling":
+		writeJSON(w, http.StatusAccepted, job)
+	default:
+		writeProblem(w, http.StatusConflict, "Job is already terminal", "JOB_NOT_CANCELLABLE",
+			"Only queued or running jobs can be cancelled.")
+	}
+}
+
+func (a *API) resumeJob(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Resume(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if errors.Is(err, ErrJobNotResumable) {
+		writeProblem(w, http.StatusConflict, "Job cannot be resumed", "JOB_NOT_RESUMABLE",
+			"Only failed or cancelled jobs can be resumed.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not resume OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be resumed.")
+		return
+	}
+	w.Header().Set("Location", job.StatusURL)
+	writeJSON(w, http.StatusAccepted, acknowledgement{JobID: job.ID, Status: "queued", StatusURL: job.StatusURL})
+}
+
+func (a *API) deleteJob(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.Lock()
+	defer a.maintenance.Unlock()
+	unlock := a.jobs.LockMaintenance()
+	defer unlock()
+	id := r.PathValue("jobId")
+	job, err := a.jobs.Get(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+			"No job was found for the supplied identifier.")
+		return
+	}
+	if err != nil {
+		a.logger.Error("could not read OCR job for deletion", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be deleted.")
+		return
+	}
+	switch job.Status {
+	case "succeeded", "failed", "cancelled":
+	default:
+		writeProblem(w, http.StatusConflict, "Job is not terminal", "JOB_NOT_TERMINAL",
+			"Cancel the job and wait until it reaches a terminal state before deleting it.")
+		return
+	}
+	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
+		a.logger.Error("could not remove uploaded OCR job workspace", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job data could not be deleted.")
+		return
+	}
+	if err := a.store.DeleteTerminal(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeProblem(w, http.StatusNotFound, "Job not found", "JOB_NOT_FOUND",
+				"No job was found for the supplied identifier.")
+			return
+		}
+		a.logger.Error("could not delete terminal OCR job", "job_id", id, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job could not be deleted.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
+	a.maintenance.RLock()
+	defer a.maintenance.RUnlock()
 	id := r.PathValue("jobId")
 	job, err := a.jobs.Get(id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -453,6 +825,11 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The processed files are available only after the job succeeds.")
 		return
 	}
+	a.writeJobResultArchive(w, job)
+}
+
+func (a *API) writeJobResultArchive(w http.ResponseWriter, job Job) {
+	id := job.ID
 	root, err := filepath.EvalSymlinks(a.config.DataRoot)
 	if err != nil {
 		a.logger.Error("could not resolve data root for job result", "job_id", id, "error", err)
@@ -460,13 +837,13 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The job result could not be read.")
 		return
 	}
-	resultDirectory, err := resolveRelative(root, job.OutputPath)
+	resultDirectory, err := resolveRelative(root, job.OutputPath, isUploadedJob(job))
 	if err == nil {
 		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
 	}
 	if errors.Is(err, os.ErrNotExist) && isUploadedJob(job) {
-		writeProblem(w, http.StatusGone, "Job result already downloaded", "JOB_RESULT_CONSUMED",
-			"The uploaded job workspace was removed after its result was downloaded.")
+		writeProblem(w, http.StatusGone, "Job result unavailable", "JOB_RESULT_UNAVAILABLE",
+			"The uploaded job workspace is no longer present on the data volume.")
 		return
 	}
 	if err != nil || !within(root, resultDirectory) {
@@ -519,15 +896,12 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The job result could not be read.")
 		return
 	}
+	w.Header().Set("X-Job-ID", job.ID)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.tar.gz"`, job.ID))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", archiveInfo.Size()))
 	if _, err := io.Copy(w, file); err != nil {
 		a.logger.Warn("could not send job result archive", "job_id", id, "error", err)
-		return
-	}
-	if err := removeUploadedJobWorkspace(a.config.DataRoot, job); err != nil {
-		a.logger.Error("could not remove downloaded archive job workspace", "job_id", id, "error", err)
 	}
 }
 

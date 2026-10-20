@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/docker/docker/api/types/mount"
@@ -61,6 +63,7 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 			sawCreate = true
 			var body struct {
 				Image      string            `json:"Image"`
+				User       string            `json:"User"`
 				Env        []string          `json:"Env"`
 				Labels     map[string]string `json:"Labels"`
 				HostConfig struct {
@@ -71,7 +74,10 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode create request: %v", err)
 			}
-			if body.Image != "example/ocr:v1.0.0" || len(body.Env) != 1 || body.Env[0] != "OCR_JOBS=4" {
+			if body.Image != "example/ocr:v1.0.0" || body.User != "65532:65532" ||
+				len(body.Env) != 4 || body.Env[0] != "OCR_JOBS=4" ||
+				body.Env[1] != "OCR_LANGUAGE=deu+eng" ||
+				body.Env[2] != "OCR_OPTIMIZE=0" || body.Env[3] != "HOME=/tmp" {
 				t.Errorf("unexpected container config: %#v", body)
 			}
 			if len(body.HostConfig.Mounts) != 2 ||
@@ -112,6 +118,7 @@ func TestDockerExecutorUsesOnlyFixedMountsAndCapturesOutcome(t *testing.T) {
 	var logs string
 	exitCode, err := executor.Run(context.Background(), Job{
 		ID: "job_test", InputHost: "/daemon/data/in", OutputHost: "/daemon/data/out",
+		OCRLanguage: "deu+eng", OCROptimize: 0,
 	}, func(id string) error {
 		runningID = id
 		return nil
@@ -156,5 +163,56 @@ func TestDockerExecutorReturnsImagePullFailure(t *testing.T) {
 	}
 	if createCalled {
 		t.Fatal("container creation proceeded after image pull failure")
+	}
+}
+
+func TestDockerExecutorStopsManagedContainerOnCancellation(t *testing.T) {
+	waitStarted := make(chan struct{})
+	var sawStop, sawRemove atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/images/create"):
+			_, _ = io.WriteString(w, "{}")
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"Id":"container-123","Warnings":[]}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/wait"):
+			close(waitStarted)
+			<-r.Context().Done()
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/container-123/logs"):
+			_, _ = io.WriteString(w, "cancelled OCR log")
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/container-123/stop"):
+			sawStop.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/containers/container-123"):
+			sawRemove.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	executor := newTestDockerExecutor(t, server, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer executor.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := executor.Run(ctx, Job{
+			ID: "job_cancel", InputHost: "/daemon/data/in", OutputHost: "/daemon/data/out",
+		}, func(string) error { return nil }, func([]byte) error { return nil })
+		result <- err
+	}()
+	<-waitStarted
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if !sawStop.Load() || !sawRemove.Load() {
+		t.Fatalf("cancel did not stop and remove the managed container: stop=%v remove=%v", sawStop.Load(), sawRemove.Load())
 	}
 }

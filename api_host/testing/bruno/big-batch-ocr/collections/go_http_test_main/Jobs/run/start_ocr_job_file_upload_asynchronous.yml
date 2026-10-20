@@ -1,7 +1,7 @@
 info:
-  name: start_ocr_job_file_upload
+  name: start_ocr_job_file_upload_asynchronous
   type: http
-  seq: 3
+  seq: 4
 
 http:
   method: POST
@@ -12,7 +12,7 @@ http:
       - name: inputArchive
         type: file
         value:
-          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\compressed_pdfs.tar.gz
+          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\Vertrag01.tar.gz
         contentType: application/gzip
       - name: mode
         type: text

@@ -1,7 +1,7 @@
 info:
-  name: start_ocr_job
+  name: start_ocr_job_file_upload_synchronous
   type: http
-  seq: 2
+  seq: 3
 
 http:
   method: POST
@@ -9,23 +9,22 @@ http:
   body:
     type: multipart-form
     data:
-      - name: inputPath
-        type: text
-        value: incoming/sample
-      - name: outputPath
-        type: text
-        value: processed/sample
+      - name: inputArchive
+        type: file
+        value:
+          - \\wsl.localhost\Ubuntu-24.04\home\fb\test\Vertrag01.tar.gz
+        contentType: application/gzip
       - name: mode
         type: text
-        value: asynchronous
+        value: synchronous
   auth: inherit
 
 runtime:
   scripts:
     - type: after-response
       code: |-
-        const data = res.getBody();
-        bru.setEnvVar("jobId", data.jobId);
+        const jobId = res.getHeader("X-Job-ID");
+        bru.setEnvVar("jobId", jobId);
 
 settings:
   encodeUrl: true
