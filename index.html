@@ -376,26 +376,25 @@
 
       .feature-strip {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        border-top: 1px solid var(--line);
-        border-bottom: 1px solid var(--line);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
       }
 
       .feature {
         display: flex;
         align-items: flex-start;
         gap: 13px;
-        padding: 24px 22px 24px 0;
-      }
-
-      .feature + .feature {
-        padding-left: 24px;
-        border-left: 1px solid var(--line);
+        min-height: 112px;
+        padding: 19px 16px;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: rgba(255, 255, 255, 0.68);
+        box-shadow: 0 8px 24px rgba(27, 55, 39, 0.025);
       }
 
       .feature svg {
-        width: 18px;
-        height: 18px;
+        width: 19px;
+        height: 19px;
         flex: 0 0 auto;
         color: var(--green);
       }
@@ -723,29 +722,6 @@
           grid-template-columns: repeat(2, 1fr);
         }
 
-        .feature:nth-child(3) {
-          grid-column: 1 / -1;
-          padding-left: 0;
-          border-left: 0;
-          border-top: 1px solid var(--line);
-        }
-
-        .feature:nth-child(n + 3) {
-          border-top: 1px solid var(--line);
-        }
-
-        .feature {
-          padding-right: 12px;
-        }
-
-        .feature + .feature {
-          padding-left: 14px;
-        }
-
-        .feature:nth-child(3) {
-          padding-left: 0;
-        }
-
         .mode-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -857,19 +833,12 @@
 
         .feature-strip {
           grid-template-columns: 1fr;
-          padding-block: 9px;
+          gap: 9px;
         }
 
-        .feature,
-        .feature + .feature,
-        .feature:nth-child(3) {
-          grid-column: auto;
-          padding: 13px 0;
-          border: 0;
-        }
-
-        .feature:nth-child(n + 2) {
-          border-top: 1px solid var(--line);
+        .feature {
+          min-height: 0;
+          padding: 16px;
         }
 
         .modes {
@@ -1135,17 +1104,29 @@
               <span>After an interruption or failure, resume where you left off; verified completed PDFs are skipped.</span>
             </div>
           </div>
+          <div class="feature">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="5" r="2"></circle>
+              <circle cx="6" cy="18" r="2"></circle>
+              <circle cx="18" cy="18" r="2"></circle>
+              <path d="M12 7v4m0 0-6 5m6-5 6 5"></path>
+            </svg>
+            <div>
+              <strong>Docker or Kubernetes</strong>
+              <span>The API host detects its runtime and runs OCR in managed containers or Kubernetes Jobs.</span>
+            </div>
+          </div>
         </section>
 
         <section class="modes" id="ways-to-run" aria-labelledby="modes-title">
           <div class="section-heading">
             <div>
-                <p class="eyebrow">From laptop to cluster</p>
-                <h2 id="modes-title">Run it your way.</h2>
+              <p class="eyebrow">From laptop to cluster</p>
+              <h2 id="modes-title">Run it your way.</h2>
             </div>
             <p class="section-intro">
-                Start with a local folder, use a container, or run managed OCR
-                jobs through the API.
+              Start with a local folder, use a container, or run managed OCR
+              jobs through the API.
             </p>
           </div>
           <div class="mode-grid">
