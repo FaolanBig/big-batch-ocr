@@ -4,7 +4,7 @@ Big Batch OCR processes document folders in batches. It recursively finds PDF
 files, applies OCR with [OCRmyPDF](https://ocrmypdf.readthedocs.io/), and copies
 non-PDF files to a separate destination while preserving the directory
 structure. Run the batcher directly on Linux, in Docker, or submit jobs through
-the Docker-based API host.
+the API host.
 
 ## What it does
 
@@ -20,9 +20,11 @@ the Docker-based API host.
   Identical non-PDF files are also skipped.
 - **Progress and diagnostics:** native runs display progress and OCR output in
   tmux panes; Docker runs write logs alongside the output by default.
-- **API job handling:** the API host authenticates requests by bearer key,
-  validates paths under a configured data root, persists jobs in SQLite, and
-  runs OCR containers through a configurable queue.
+- **API job handling:** the single API host authenticates requests by bearer
+  key, validates paths under a configured data root, persists jobs in SQLite,
+  and runs OCR through a configurable queue. It automatically detects whether
+  it is running in Kubernetes or in Docker: Kubernetes deployments
+  run OCR as Kubernetes Jobs, while Docker deployments use Docker Engine.
 
 Files are processed sequentially; `OCR_JOBS` controls OCRmyPDF's internal
 worker threads for each PDF, not the number of files processed at once. The API
@@ -34,7 +36,7 @@ host can run multiple OCR containers at once with `MAX_CONCURRENT_JOBS`.
 | --- | --- | --- |
 | [Terminal script](#1-run-the-batcher-in-a-terminal) | Local or server-side folder batches | Linux, Bash, OCRmyPDF and dependencies, tmux |
 | [Docker image](#2-run-the-batcher-in-docker) | Reproducible runs without installing OCR tools on the host | Docker |
-| [API host](#3-run-the-api-host) | Automation platforms and queued, trackable jobs | Linux Docker host and trusted Docker access |
+| [API host](#3-run-the-api-host) | Automation platforms and queued, trackable jobs | Docker Engine, or a Kubernetes cluster with shared persistent storage |
 
 ## Quick start
 
@@ -101,7 +103,7 @@ Replace the example tag with a version available in the
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
-TAG=v1.1.0
+TAG=v1.2.0
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
@@ -122,15 +124,29 @@ cd ocr_batcher/docker
 sudo bash build_dockerfile.sh
 ```
 
-Then run the local `ocr_batch_sequencial:v1.1.0` image with the same volume
+Then run the local `ocr_batch_sequencial:v1.2.0` image with the same volume
 mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
 
 ### 3. Run the API host
 
+There is one API host for both Docker and Kubernetes; no platform setting is
+needed. The Docker instructions below are the quickstart. To deploy on
+Kubernetes, use the provided
+[`api_host/k8s/api-host.yaml`](./api_host/k8s/api-host.yaml) manifest and the
+[Kubernetes deployment guide](./api_host/doc/deployment.md#kubernetes-deployment).
+Create the `api-host-secrets` Secret with your `API_KEY`, set the API-host image
+to a build/release that includes Kubernetes support, and apply the manifest.
+The API host detects its Kubernetes service-account credentials and creates
+OCR Jobs using the same PersistentVolumeClaim mounted at `DATA_ROOT`; the
+cluster must provide storage that can be mounted by both the API pod and OCR
+Job pods. The manifest also configures persistent job state, scoped RBAC, and
+an OCR-job NetworkPolicy.
+
 For security, prefer uploading `.tar.gz` archives through the API and leave
 shared-directory submissions disabled unless they are required for trusted
 callers. The API host accepts either a shared-directory input or an uploaded
-archive, starts the configured OCR image using Docker, records jobs in a
+archive, runs the configured OCR image through its automatically selected
+Docker or Kubernetes backend, records jobs in a
 persistent SQLite database, and exposes synchronous and asynchronous modes.
 Uploaded jobs receive isolated input/output folders, and the result can be
 downloaded by job ID; their workspace is removed after a successful download.
@@ -138,7 +154,7 @@ The following is a quick outline; follow the complete
 [API host deployment guide](./api_host/doc/deployment.md) before exposing or
 operating the service.
 
-Configure the API on a Linux Docker host:
+For Docker, configure the API on a Linux Docker host:
 
 ```bash
 ./api_host/config/configure_api_host.sh
@@ -161,7 +177,7 @@ directories automatically. The configured OCR image is pulled on first use if
 it is not already available locally. Pull and start the pre-compiled API host:
 
 ```bash
-TAG=v1.1.0
+TAG=v1.2.0
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
@@ -173,8 +189,8 @@ host yourself instead, build the standard image with
 `bash api_host/build/build_dockerfile_proxied_cert.sh` when building behind a
 TLS-inspection proxy), then start it with `./api_host/run/run_container.sh`.
 
-The API listens on `127.0.0.1:8080` by default. Check liveness and submit an
-asynchronous job (replace the paths and key):
+The Docker API listens on `127.0.0.1:8080` by default. Check liveness and
+submit an asynchronous job (replace the paths and key):
 
 ```bash
 read -r -s -p "API key: " API_KEY
@@ -218,7 +234,8 @@ symlink escapes, unreadable inputs, and identical or nested input/output
 directories. Missing output directories are created only when
 `"createDestination":true` is provided. Restrict network access and protect
 the API key: access to the Docker socket grants broad control over the Docker
-host. See the [API contract](./api_host/api/api_specification/main_api_specification_api_host.json)
+host. In Kubernetes, restrict the API Service's network exposure and retain
+the namespace-scoped RBAC in the example manifest. See the [API contract](./api_host/api/api_specification/main_api_specification_api_host.json)
 and [deployment guide](./api_host/doc/deployment.md) for configuration,
 security, and operational limits.
 
@@ -232,9 +249,9 @@ security, and operational limits.
   those PDFs to be processed again.
 - The API host's queue and concurrency limit are local to one API-host
   instance. Do not run multiple API hosts against the same job database.
-- The API host controls Docker and should run only on a trusted host and
-  network; use a protected secret for `API_KEY` and terminate TLS at a trusted
-  reverse proxy for remote access.
+- The API host controls Docker or can create Kubernetes OCR Jobs, so deploy it
+  only on a trusted host/cluster and network. Use a protected secret for
+  `API_KEY` and terminate TLS at a trusted reverse proxy for remote access.
 
 ## Documentation
 
