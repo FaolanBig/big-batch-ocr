@@ -28,6 +28,7 @@ type KubernetesExecutor struct {
 	client           kubernetes.Interface
 	namespace        string
 	serviceAccount   string
+	imagePullSecrets []corev1.LocalObjectReference
 	dataClaim        string
 	dataClaimSubPath string
 	dataRoot         string
@@ -65,7 +66,8 @@ func NewKubernetesExecutor(cfg Config, logger *slog.Logger) (*KubernetesExecutor
 	}
 	return &KubernetesExecutor{
 		client: clientset, namespace: namespace, serviceAccount: serviceAccount,
-		dataClaim: claimName, dataClaimSubPath: claimSubPath, dataRoot: cfg.DataRoot,
+		imagePullSecrets: append([]corev1.LocalObjectReference(nil), pod.Spec.ImagePullSecrets...),
+		dataClaim:        claimName, dataClaimSubPath: claimSubPath, dataRoot: cfg.DataRoot,
 		image: cfg.OCRImage, jobs: cfg.OCRJobs, logger: logger,
 	}, nil
 }
@@ -143,6 +145,7 @@ func (e *KubernetesExecutor) Run(ctx context.Context, job Job, markRunning func(
 					RestartPolicy:                corev1.RestartPolicyNever,
 					ServiceAccountName:           e.serviceAccount,
 					AutomountServiceAccountToken: &automountToken,
+					ImagePullSecrets:             append([]corev1.LocalObjectReference(nil), e.imagePullSecrets...),
 					SecurityContext:              &corev1.PodSecurityContext{RunAsNonRoot: boolPointer(true), RunAsUser: int64Pointer(65532), RunAsGroup: int64Pointer(65532)},
 					Containers: []corev1.Container{{
 						Name:            "ocr",
@@ -178,7 +181,11 @@ func (e *KubernetesExecutor) Run(ctx context.Context, job Job, markRunning func(
 	}
 	_, err = e.client.BatchV1().Jobs(e.namespace).Create(ctx, worker, metav1.CreateOptions{})
 	if err != nil {
-		return 1, fmt.Errorf("create Kubernetes OCR job: %w", err)
+		createErr := fmt.Errorf("create Kubernetes OCR job: %w", err)
+		if cleanupErr := e.StopInterrupted(context.Background(), name); cleanupErr != nil {
+			createErr = errors.Join(createErr, cleanupErr)
+		}
+		return 1, createErr
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -194,7 +201,7 @@ func (e *KubernetesExecutor) Run(ctx context.Context, job Job, markRunning func(
 			return 1, fmt.Errorf("monitor Kubernetes OCR job: %w", err)
 		}
 		if state.Status.Succeeded > 0 || state.Status.Failed > 0 {
-			e.captureLogs(ctx, name, saveLogs)
+			e.captureLogs(ctx, job.ID, name, saveLogs)
 			exitCode := 0
 			if state.Status.Failed > 0 {
 				exitCode = 1
@@ -224,9 +231,9 @@ func (e *KubernetesExecutor) dataSubPath(hostPath string) (string, error) {
 	return subPath, nil
 }
 
-func (e *KubernetesExecutor) captureLogs(ctx context.Context, jobName string, saveLogs func([]byte) error) {
+func (e *KubernetesExecutor) captureLogs(ctx context.Context, jobID, jobName string, saveLogs func([]byte) error) {
 	pods, err := e.client.CoreV1().Pods(e.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "batch.kubernetes.io/job-name=" + jobName,
+		LabelSelector: "big-batch-ocr/job-id=" + jobID,
 	})
 	if err != nil {
 		e.logger.Warn("could not locate Kubernetes OCR pod logs", "job_name", jobName, "error", err)

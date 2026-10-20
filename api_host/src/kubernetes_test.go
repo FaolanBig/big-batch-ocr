@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -52,7 +53,8 @@ func TestKubernetesExecutorCreatesJobWithSharedDataSubpaths(t *testing.T) {
 	})
 	executor := &KubernetesExecutor{
 		client: client, namespace: "default", serviceAccount: "api-host",
-		dataClaim: "ocr-data", dataClaimSubPath: "api-data", dataRoot: "/data",
+		imagePullSecrets: []corev1.LocalObjectReference{{Name: "registry-credentials"}},
+		dataClaim:        "ocr-data", dataClaimSubPath: "api-data", dataRoot: "/data",
 		image: "example/ocr:v1.0.0", jobs: 4,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -86,6 +88,35 @@ func TestKubernetesExecutorCreatesJobWithSharedDataSubpaths(t *testing.T) {
 	if spec.Volumes[0].PersistentVolumeClaim.ClaimName != "ocr-data" ||
 		spec.ServiceAccountName != "api-host" || spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
 		t.Fatalf("unexpected OCR pod settings: %#v", spec)
+	}
+	if len(spec.ImagePullSecrets) != 1 || spec.ImagePullSecrets[0].Name != "registry-credentials" {
+		t.Fatalf("OCR image pull secrets = %#v", spec.ImagePullSecrets)
+	}
+}
+
+func TestKubernetesExecutorCleansUpJobAfterCreateError(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	deleted := false
+	client.PrependReactor("create", "jobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("request timed out")
+	})
+	client.PrependReactor("delete", "jobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleted = true
+		return true, nil, nil
+	})
+	executor := &KubernetesExecutor{
+		client: client, namespace: "default", dataRoot: "/data",
+		dataClaim: "ocr-data", image: "example/ocr:v1.0.0",
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	_, err := executor.Run(context.Background(), Job{
+		ID: "job_456", InputHost: "/data/in", OutputHost: "/data/out",
+	}, func(string) error { return nil }, func([]byte) error { return nil })
+	if err == nil {
+		t.Fatal("expected Kubernetes Job creation error")
+	}
+	if !deleted {
+		t.Fatal("expected cleanup after uncertain Kubernetes Job creation")
 	}
 }
 

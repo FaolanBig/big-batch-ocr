@@ -91,7 +91,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: api-host
-          image: ghcr.io/faolanbig/big-batch-ocr_api-host:replace-with-kubernetes-enabled-release
+          image: ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.0
           ports:
             - name: http
               containerPort: 8080
@@ -110,7 +110,7 @@ spec:
             - name: DATABASE_PATH
               value: /var/lib/api-host/jobs.db
             - name: OCR_IMAGE
-              value: ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.1.0
+              value: ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0
             - name: OCR_JOBS
               value: "3"
             - name: OCR_LANGUAGE
