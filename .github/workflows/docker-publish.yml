@@ -7,6 +7,7 @@ name: Docker
 
 on:
   pull_request:
+    branches: [deployment_publish_docker_images_auto]
     types: [closed]
 
 env:
