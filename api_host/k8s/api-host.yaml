@@ -4,7 +4,8 @@ metadata:
   name: api-host-data
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
+  storageClassName: rwx-rf2-lrs
   resources:
     requests:
       storage: 50Gi
@@ -16,6 +17,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: rwo-rf2-zrs
   resources:
     requests:
       storage: 1Gi
@@ -112,15 +114,30 @@ spec:
             - name: OCR_IMAGE
               value: ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0
             - name: OCR_JOBS
-              value: "3"
+              value: "12"
+            - name: OCR_CPU_REQUEST
+              value: "12"
+            - name: OCR_CPU_LIMIT
+              value: "16"
+            - name: OCR_MEMORY_REQUEST
+              value: 2Gi
+            - name: OCR_MEMORY_LIMIT
+              value: 4Gi
             - name: OCR_LANGUAGE
               value: eng
             - name: OCR_OPTIMIZE
               value: "3"
             - name: MAX_CONCURRENT_JOBS
-              value: "1"
+              value: "10"
             - name: SYNC_WAIT_LIMIT_SECONDS
               value: "30"
+          resources:
+            requests:
+              cpu: "4"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
           readinessProbe:
             httpGet:
               path: /health

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type Config struct {
@@ -23,6 +25,7 @@ type Config struct {
 	DatabasePath         string
 	OCRImage             string
 	OCRJobs              int
+	OCRWorkerResources   corev1.ResourceRequirements
 	OCRLanguage          string
 	OCROptimize          int
 	MaxConcurrentJobs    int
@@ -71,6 +74,9 @@ func LoadConfig() (Config, error) {
 	if cfg.OCRJobs, err = envPositiveInt("OCR_JOBS", cfg.OCRJobs); err != nil {
 		return Config{}, err
 	}
+	if cfg.OCRWorkerResources, err = envOCRWorkerResources(); err != nil {
+		return Config{}, err
+	}
 	if cfg.OCRLanguage, err = validateOCRLanguage(cfg.OCRLanguage); err != nil {
 		return Config{}, fmt.Errorf("OCR_LANGUAGE: %w", err)
 	}
@@ -86,6 +92,65 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.SyncWaitLimit = time.Duration(waitSeconds) * time.Second
 	return cfg, nil
+}
+
+func envOCRWorkerResources() (corev1.ResourceRequirements, error) {
+	keys := []string{"OCR_CPU_REQUEST", "OCR_CPU_LIMIT", "OCR_MEMORY_REQUEST", "OCR_MEMORY_LIMIT"}
+	values := make([]string, len(keys))
+	setCount := 0
+	for i, key := range keys {
+		if value, exists := os.LookupEnv(key); exists {
+			values[i] = value
+			setCount++
+		}
+	}
+	if setCount == 0 {
+		return corev1.ResourceRequirements{}, nil
+	}
+	if setCount != len(keys) {
+		return corev1.ResourceRequirements{}, errors.New("OCR worker CPU and memory requests and limits must all be set together")
+	}
+
+	cpuRequest, err := parsePositiveQuantity(keys[0], values[0])
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+	cpuLimit, err := parsePositiveQuantity(keys[1], values[1])
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+	memoryRequest, err := parsePositiveQuantity(keys[2], values[2])
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+	memoryLimit, err := parsePositiveQuantity(keys[3], values[3])
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+	if cpuRequest.Cmp(cpuLimit) > 0 {
+		return corev1.ResourceRequirements{}, errors.New("OCR_CPU_REQUEST must not exceed OCR_CPU_LIMIT")
+	}
+	if memoryRequest.Cmp(memoryLimit) > 0 {
+		return corev1.ResourceRequirements{}, errors.New("OCR_MEMORY_REQUEST must not exceed OCR_MEMORY_LIMIT")
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    cpuRequest,
+			corev1.ResourceMemory: memoryRequest,
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    cpuLimit,
+			corev1.ResourceMemory: memoryLimit,
+		},
+	}, nil
+}
+
+func parsePositiveQuantity(key, value string) (resource.Quantity, error) {
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil || quantity.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("%s must be a positive Kubernetes resource quantity", key)
+	}
+	return quantity, nil
 }
 
 func validateOCRLanguage(value string) (string, error) {
