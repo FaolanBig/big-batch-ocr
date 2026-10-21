@@ -4,7 +4,8 @@ metadata:
   name: api-host-data
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
+  storageClassName: rwx-rf2-lrs
   resources:
     requests:
       storage: 50Gi
@@ -16,6 +17,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: rwo-rf2-zrs
   resources:
     requests:
       storage: 1Gi
