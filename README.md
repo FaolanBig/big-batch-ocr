@@ -103,7 +103,7 @@ Replace the example tag with a version available in the
 published tags correspond to Git tags, and there is no `latest` tag.
 
 ```bash
-TAG=v1.2.0
+TAG=v1.2.1
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
@@ -124,7 +124,7 @@ cd ocr_batcher/docker
 sudo bash build_dockerfile.sh
 ```
 
-Then run the local `ocr_batch_sequencial:v1.2.0` image with the same volume
+Then run the local `ocr_batch_sequencial:v1.2.1` image with the same volume
 mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
 
 ### 3. Run the API host
@@ -177,7 +177,7 @@ directories automatically. The configured OCR image is pulled on first use if
 it is not already available locally. Pull and start the pre-compiled API host:
 
 ```bash
-TAG=v1.2.0
+TAG=v1.2.1
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
