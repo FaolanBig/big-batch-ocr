@@ -34,6 +34,7 @@ type KubernetesExecutor struct {
 	dataRoot         string
 	image            string
 	jobs             int
+	workerResources  corev1.ResourceRequirements
 	logger           *slog.Logger
 }
 
@@ -68,7 +69,7 @@ func NewKubernetesExecutor(cfg Config, logger *slog.Logger) (*KubernetesExecutor
 		client: clientset, namespace: namespace, serviceAccount: serviceAccount,
 		imagePullSecrets: append([]corev1.LocalObjectReference(nil), pod.Spec.ImagePullSecrets...),
 		dataClaim:        claimName, dataClaimSubPath: claimSubPath, dataRoot: cfg.DataRoot,
-		image: cfg.OCRImage, jobs: cfg.OCRJobs, logger: logger,
+		image: cfg.OCRImage, jobs: cfg.OCRJobs, workerResources: cfg.OCRWorkerResources, logger: logger,
 	}, nil
 }
 
@@ -157,6 +158,7 @@ func (e *KubernetesExecutor) Run(ctx context.Context, job Job, markRunning func(
 							{Name: "OCR_OPTIMIZE", Value: fmt.Sprintf("%d", job.OCROptimize)},
 							{Name: "HOME", Value: "/tmp"},
 						},
+						Resources: e.workerResources,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: boolPointer(false),
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},

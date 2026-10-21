@@ -11,6 +11,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -56,6 +57,16 @@ func TestKubernetesExecutorCreatesJobWithSharedDataSubpaths(t *testing.T) {
 		imagePullSecrets: []corev1.LocalObjectReference{{Name: "registry-credentials"}},
 		dataClaim:        "ocr-data", dataClaimSubPath: "api-data", dataRoot: "/data",
 		image: "example/ocr:v1.0.0", jobs: 4,
+		workerResources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("12"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("16"),
+				corev1.ResourceMemory: resource.MustParse("4Gi"),
+			},
+		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	runningName := ""
@@ -79,6 +90,12 @@ func TestKubernetesExecutorCreatesJobWithSharedDataSubpaths(t *testing.T) {
 	if spec.Containers[0].Image != "example/ocr:v1.0.0" || spec.Containers[0].Env[0].Value != "4" ||
 		spec.Containers[0].Env[1].Value != "deu+eng" || spec.Containers[0].Env[2].Value != "2" {
 		t.Fatalf("unexpected OCR container image/settings: %#v", spec.Containers[0])
+	}
+	if spec.Containers[0].Resources.Requests.Cpu().String() != "12" ||
+		spec.Containers[0].Resources.Requests.Memory().String() != "2Gi" ||
+		spec.Containers[0].Resources.Limits.Cpu().String() != "16" ||
+		spec.Containers[0].Resources.Limits.Memory().String() != "4Gi" {
+		t.Fatalf("unexpected OCR container resources: %#v", spec.Containers[0].Resources)
 	}
 	mounts := spec.Containers[0].VolumeMounts
 	if len(mounts) != 2 || mounts[0].MountPath != "/source" || mounts[0].SubPath != "api-data/invoices" ||

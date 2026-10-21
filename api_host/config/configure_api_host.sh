@@ -62,7 +62,7 @@ ocr_language=""
 ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
-read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0"
+read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1"
 ocr_image="$REPLY"
 while true; do
   image_name="${ocr_image%@*}"
@@ -71,7 +71,7 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0"
+  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1"
   ocr_image="$REPLY"
 done
 
@@ -119,6 +119,7 @@ while true; do
 done
 
 read_positive_integer "OCR worker threads per container" "3" ocr_jobs
+read_positive_integer "Maximum concurrent OCR containers" "1" max_concurrent_jobs
 while true; do
   read_value "Default OCR language codes (join multiple with +)" "eng"
   if [[ "$REPLY" =~ ^[A-Za-z0-9_]+(\+[A-Za-z0-9_]+)*$ && ${#REPLY} -le 128 ]]; then
@@ -128,7 +129,6 @@ while true; do
   printf "Use language codes containing only letters, digits, or underscores, joined by '+'.\n" >/dev/tty
 done
 read_ocr_optimize
-read_positive_integer "Maximum concurrent OCR containers" "1" max_concurrent_jobs
 read_positive_integer "Synchronous wait limit in seconds" "30" sync_wait_limit
 
 while true; do
