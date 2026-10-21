@@ -136,6 +136,30 @@ func TestOCRConfigurationValidation(t *testing.T) {
 	}
 }
 
+func TestEnvOCRWorkerResources(t *testing.T) {
+	t.Setenv("OCR_CPU_REQUEST", "12")
+	t.Setenv("OCR_CPU_LIMIT", "16")
+	t.Setenv("OCR_MEMORY_REQUEST", "2Gi")
+	t.Setenv("OCR_MEMORY_LIMIT", "4Gi")
+	resources, err := envOCRWorkerResources()
+	if err != nil {
+		t.Fatalf("parse OCR worker resources: %v", err)
+	}
+	if resources.Requests.Cpu().String() != "12" || resources.Requests.Memory().String() != "2Gi" ||
+		resources.Limits.Cpu().String() != "16" || resources.Limits.Memory().String() != "4Gi" {
+		t.Fatalf("unexpected OCR worker resources: %#v", resources)
+	}
+
+	t.Setenv("OCR_CPU_LIMIT", "")
+	if _, err := envOCRWorkerResources(); err == nil {
+		t.Fatal("expected incomplete OCR worker resource settings to fail")
+	}
+	t.Setenv("OCR_CPU_LIMIT", "8")
+	if _, err := envOCRWorkerResources(); err == nil {
+		t.Fatal("expected request greater than limit to fail")
+	}
+}
+
 func TestAbsoluteDirectoryNeedsExistingDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing")
 	if _, err := absoluteDirectory(path, "DATA_ROOT"); err == nil {

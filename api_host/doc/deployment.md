@@ -58,6 +58,8 @@ protected `.env` file:
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
 | `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.0`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
+| `OCR_CPU_REQUEST` / `OCR_CPU_LIMIT` | No | — | Kubernetes OCR Job CPU request and limit; set both with the memory values below to enable per-worker resource settings |
+| `OCR_MEMORY_REQUEST` / `OCR_MEMORY_LIMIT` | No | — | Kubernetes OCR Job memory request and limit, using Kubernetes quantity syntax such as `2Gi` and `4Gi` |
 | `OCR_LANGUAGE` | No | `eng` | Default OCRmyPDF language code or `+`-separated language codes, such as `deu+eng` |
 | `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`) |
 | `MAX_CONCURRENT_JOBS` | No | `1` | Maximum OCR containers running at once |
@@ -109,6 +111,13 @@ Jobs in the same namespace, mounting that same claim at `/source` and
 `DOCKER_DATA_ROOT` in Kubernetes. The OCR image is pulled by Kubernetes when a
 job is scheduled, so it must be available to the cluster nodes or their image
 pull credentials.
+
+The example manifest requests and limits the API host to 4 CPUs and 4 GiB of
+memory. It also sets each OCR Job to request 12 CPUs and 2 GiB of memory, with
+limits of 16 CPUs and 4 GiB. Adjust `MAX_CONCURRENT_JOBS` to control how many
+such workers may run at once; resource quota must accommodate their combined
+requests and limits. The four `OCR_*_REQUEST`/`OCR_*_LIMIT` settings must be
+provided together when configuring per-worker resources.
 
 The provided Role grants only the permissions needed to inspect the API pod,
 create/monitor/delete OCR Jobs, and read their pod logs. Keep this Role
