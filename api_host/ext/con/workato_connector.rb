@@ -1,4 +1,5 @@
 {
+  secure_tunnel: true,
   title: 'Big Batch OCR',
 
   connection: {

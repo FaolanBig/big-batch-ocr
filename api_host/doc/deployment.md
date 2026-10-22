@@ -75,7 +75,8 @@ trusted reverse proxy when remote clients need access.
 ## Kubernetes deployment
 
 [`../k8s/api-host.yaml`](../k8s/api-host.yaml) deploys the same API-host image
-as one Kubernetes Deployment. It includes a ClusterIP Service, a scoped
+as one Kubernetes Deployment. It includes a ClusterIP Service, an HTTPS
+Ingress, a scoped
 namespace Role/RoleBinding, a NetworkPolicy isolating OCR Jobs, a shared data
 PVC, and a separate PVC for the SQLite job database. The data PVC must be backed by storage that can be mounted
 by both the API pod and its OCR Job pods. The example uses `ReadWriteOnce` and
@@ -102,6 +103,19 @@ kubectl apply -f api_host/k8s/api-host.yaml
 kubectl rollout status deployment/api-host
 kubectl port-forward service/api-host 8080:8080
 ```
+
+The manifest's Ingress is a generic example using the `nginx` IngressClass,
+the reserved placeholder hostname `ocr.example.invalid`, and a TLS Secret named
+`api-host-tls`. Before using it, replace the hostname with a DNS name you
+control and point its DNS record to your Ingress controller's external address.
+Set `ingressClassName` to an installed IngressClass, and create the
+`api-host-tls` Secret in the same namespace with a certificate and private key
+valid for that hostname (or update `secretName` to match the Secret provisioned
+by your certificate manager). The cluster must have an Ingress controller
+installed and reachable externally; the Ingress routes HTTPS requests to the
+internal ClusterIP Service on port 8080. TLS terminates at the Ingress
+controller, while traffic from it to the API host is HTTP. Configure Workato
+with the resulting `https://` hostname; its connection test uses `/health`.
 
 The service account token and `KUBERNETES_SERVICE_HOST` are provided by
 Kubernetes. The API host uses them to detect the platform, read its own pod
