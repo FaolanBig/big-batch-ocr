@@ -96,26 +96,59 @@ includes automatic Kubernetes support. Review the release tags for both images i
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host),
 then set the `image` and `OCR_IMAGE` values in the manifest to the desired
 version or immutable digest. Apply it in the current namespace, where the
-Secret should also live:
+Secret should also live. Complete the Ingress configuration below before
+applying the manifest; both the API-key Secret and TLS Secret must exist in
+that namespace.
+
+### External access through HTTPS Ingress
+
+The manifest includes a generic Ingress using the `nginx` IngressClass, the
+reserved placeholder hostname `ocr.example.invalid`, and a TLS Secret named
+`api-host-tls`. It is a template, not a working public endpoint. Before
+applying it:
+
+1. Install or select an Ingress controller that is externally reachable. Check
+   its IngressClass with `kubectl get ingressclass` and update
+   `ingressClassName` in the manifest if it is not `nginx`.
+2. Replace both occurrences of `ocr.example.invalid` in the Ingress with a DNS
+   hostname you control. Point that hostname to the external address of the
+   Ingress controller.
+3. Obtain a TLS certificate whose subject names include that hostname. Create
+   the TLS Secret in the same namespace as the Ingress, or configure your
+   certificate manager to provision it:
+
+   ```sh
+   kubectl create secret tls api-host-tls \
+     --cert=path/to/tls.crt \
+     --key=path/to/tls.key
+   ```
+
+   If the Secret has a different name, update `secretName` in the Ingress.
+4. Apply the manifest and wait for the Ingress controller to publish its
+   address:
+
+   ```sh
+   kubectl apply -f api_host/k8s/api-host.yaml
+   kubectl rollout status deployment/api-host
+   kubectl get ingress api-host
+   ```
+
+The Ingress terminates HTTPS and forwards requests over HTTP to the internal
+ClusterIP Service on port 8080. Only the Ingress is intended to be externally
+reachable; do not change the Service to `NodePort` or `LoadBalancer` to expose
+the unencrypted API port. Verify the DNS and certificate from a network outside
+the cluster:
 
 ```sh
-kubectl apply -f api_host/k8s/api-host.yaml
-kubectl rollout status deployment/api-host
-kubectl port-forward service/api-host 8080:8080
+curl --fail https://YOUR_HOSTNAME/health
 ```
 
-The manifest's Ingress is a generic example using the `nginx` IngressClass,
-the reserved placeholder hostname `ocr.example.invalid`, and a TLS Secret named
-`api-host-tls`. Before using it, replace the hostname with a DNS name you
-control and point its DNS record to your Ingress controller's external address.
-Set `ingressClassName` to an installed IngressClass, and create the
-`api-host-tls` Secret in the same namespace with a certificate and private key
-valid for that hostname (or update `secretName` to match the Secret provisioned
-by your certificate manager). The cluster must have an Ingress controller
-installed and reachable externally; the Ingress routes HTTPS requests to the
-internal ClusterIP Service on port 8080. TLS terminates at the Ingress
-controller, while traffic from it to the API host is HTTP. Configure Workato
-with the resulting `https://` hostname; its connection test uses `/health`.
+Use `https://YOUR_HOSTNAME` (without an API path) as Workato's base URL. Its
+connection test calls `/health`. See the
+[Workato connector guide](workato-connector.md) for setup and action details.
+For local-only access during setup, you can also run
+`kubectl port-forward service/api-host 8080:8080` and test
+`http://127.0.0.1:8080/health` from the same machine.
 
 The service account token and `KUBERNETES_SERVICE_HOST` are provided by
 Kubernetes. The API host uses them to detect the platform, read its own pod
