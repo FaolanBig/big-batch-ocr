@@ -593,6 +593,7 @@ func (s *JobService) execute(job Job) {
 	if current.Status == "cancelling" {
 		cancel()
 	}
+	s.logger.Info("OCR job execution started", "job_id", job.ID)
 	exitCode, runErr := s.executor.Run(ctx, job,
 		func(containerID string) error { return s.store.SetRunning(job.ID, containerID) },
 		func(logs []byte) error { return s.store.SetLogs(job.ID, logs) })

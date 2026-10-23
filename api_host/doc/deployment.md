@@ -51,6 +51,7 @@ protected `.env` file:
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `API_KEY` | Yes unless open access is explicitly enabled | — | Bearer token accepted by job endpoints |
+| `LOG_LEVEL` | No | `INFO` | Structured JSON log verbosity (`DEBUG`, `INFO`, `WARN`, or `ERROR`) |
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
@@ -71,6 +72,11 @@ Use your deployment secret manager to inject `API_KEY`; do not put a production
 key in the Compose file or source control. Generate a high-entropy key, restrict
 network exposure (the Compose example binds localhost), and terminate TLS at a
 trusted reverse proxy when remote clients need access.
+
+The API host writes structured JSON logs to standard output. Docker and
+Kubernetes collect this output automatically; view it with `docker logs api-host`
+or `kubectl logs deployment/api-host`. Set `LOG_LEVEL` in the `.env` file or as
+a container environment variable to adjust verbosity.
 
 ## Kubernetes deployment
 

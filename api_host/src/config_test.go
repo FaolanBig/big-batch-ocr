@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ func TestLoadConfigRequiresKeyUnlessAnonymous(t *testing.T) {
 	t.Setenv("OCR_OPTIMIZE", "3")
 	t.Setenv("API_KEY", "")
 	t.Setenv("ALLOW_ANONYMOUS", "false")
+	t.Setenv("LOG_LEVEL", "debug")
 	if _, err := LoadConfig(); err == nil {
 		t.Fatal("expected missing API_KEY to fail")
 	}
@@ -29,8 +31,31 @@ func TestLoadConfigRequiresKeyUnlessAnonymous(t *testing.T) {
 	if !cfg.AllowAnonymous {
 		t.Fatal("anonymous mode not enabled")
 	}
+	if cfg.LogLevel != slog.LevelDebug {
+		t.Fatalf("log level = %v, want DEBUG", cfg.LogLevel)
+	}
 	if cfg.OCRLanguage != "eng" || cfg.OCROptimize != 3 {
 		t.Fatalf("OCR defaults = %q/%d, want eng/3", cfg.OCRLanguage, cfg.OCROptimize)
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  slog.Level
+	}{
+		{value: "DEBUG", want: slog.LevelDebug},
+		{value: "info", want: slog.LevelInfo},
+		{value: "WARN", want: slog.LevelWarn},
+		{value: "ERROR", want: slog.LevelError},
+	} {
+		got, err := parseLogLevel(test.value)
+		if err != nil || got != test.want {
+			t.Errorf("parseLogLevel(%q) = %v, %v; want %v", test.value, got, err, test.want)
+		}
+	}
+	if _, err := parseLogLevel("TRACE"); err == nil {
+		t.Fatal("expected unsupported log level to fail")
 	}
 }
 

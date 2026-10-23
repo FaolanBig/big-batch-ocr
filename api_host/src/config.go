@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 )
 
 type Config struct {
+	LogLevel             slog.Level
 	RuntimePlatform      string
 	Address              string
 	APIKey               string
@@ -34,6 +36,7 @@ type Config struct {
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
+		LogLevel:          slog.LevelInfo,
 		Address:           envOr("API_ADDRESS", ":8080"),
 		APIKey:            os.Getenv("API_KEY"),
 		DataRoot:          envOr("DATA_ROOT", "/data"),
@@ -48,9 +51,13 @@ func LoadConfig() (Config, error) {
 	}
 
 	var err error
+	if cfg.LogLevel, err = parseLogLevel(envOr("LOG_LEVEL", "INFO")); err != nil {
+		return Config{}, err
+	}
 	if cfg.AllowAnonymous, err = envBool("ALLOW_ANONYMOUS", false); err != nil {
 		return Config{}, err
 	}
+
 	if cfg.AllowDirectoryAccess, err = envBool("ALLOW_DIRECTORY_ACCESS", false); err != nil {
 		return Config{}, err
 	}
@@ -92,6 +99,21 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.SyncWaitLimit = time.Duration(waitSeconds) * time.Second
 	return cfg, nil
+}
+
+func parseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToUpper(value) {
+	case "DEBUG":
+		return slog.LevelDebug, nil
+	case "INFO":
+		return slog.LevelInfo, nil
+	case "WARN":
+		return slog.LevelWarn, nil
+	case "ERROR":
+		return slog.LevelError, nil
+	default:
+		return 0, errors.New("LOG_LEVEL must be DEBUG, INFO, WARN, or ERROR")
+	}
 }
 
 func envOCRWorkerResources() (corev1.ResourceRequirements, error) {
