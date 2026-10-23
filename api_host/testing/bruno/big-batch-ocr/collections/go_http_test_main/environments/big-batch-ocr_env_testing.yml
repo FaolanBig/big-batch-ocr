@@ -1,9 +1,9 @@
 name: big-batch-ocr_env_testing
 variables:
   - name: baseUrl
-    value: http://localhost:8080
+    value: https://api-host.brave-cobra.vcluster.k8s.vector.int
     description: base URL
-  - name: jobId
-    value: job_b677499d8b9147e07c16
   - secret: true
     name: api_key
+  - name: jobId
+    value: job_bd0c817fe46bce11f27f
