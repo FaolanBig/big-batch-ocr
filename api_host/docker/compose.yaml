@@ -9,6 +9,7 @@ services:
     environment:
       API_ADDRESS: ":8080"
       API_KEY: "${API_KEY:-}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       ALLOW_ANONYMOUS: "${ALLOW_ANONYMOUS:-false}"
       ALLOW_DIRECTORY_ACCESS: "${ALLOW_DIRECTORY_ACCESS:-false}"
       DATA_ROOT: /data
