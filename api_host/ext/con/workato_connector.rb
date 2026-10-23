@@ -28,12 +28,13 @@
           headers(Authorization: "Bearer #{connection['api_key']}")
         end
       end
-    }
+    },
+    base_uri: lambda do |connection|
+      base_url = connection['base_url'].to_s.strip
+      base_url = "https://#{base_url}" unless base_url.match?(/\Ahttps?:\/\//i)
+      base_url.sub(%r{/+\z}, '')
+    end
   },
-
-  base_uri: lambda do |connection|
-    connection['base_url'].to_s.gsub(/\/+\z/, '')
-  end,
 
   test: lambda do |_connection|
     get('/health')
