@@ -4,11 +4,11 @@
 
 The recommended deployment uses the pre-compiled API-host image published to
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Use a published release tag; this example uses `v1.2.1`. Pull the image now,
+Use a published release tag; this example uses `v1.2.2`. Pull the image now,
 then start it after configuring the runtime environment below:
 
 ```sh
-TAG=v1.2.1
+TAG=v1.2.2
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ```
@@ -51,12 +51,13 @@ protected `.env` file:
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `API_KEY` | Yes unless open access is explicitly enabled | — | Bearer token accepted by job endpoints |
+| `LOG_LEVEL` | No | `INFO` | Structured JSON log verbosity (`DEBUG`, `INFO`, `WARN`, or `ERROR`) |
 | `ALLOW_ANONYMOUS` | No | `false` | Set to `true` only on a trusted, isolated network |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Set to `true` to allow jobs that refer to existing directories under `DATA_ROOT`; otherwise input must be uploaded as an archive |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon; ignored in Kubernetes |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
-| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
+| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
 | `OCR_CPU_REQUEST` / `OCR_CPU_LIMIT` | No | — | Kubernetes OCR Job CPU request and limit; set both with the memory values below to enable per-worker resource settings |
 | `OCR_MEMORY_REQUEST` / `OCR_MEMORY_LIMIT` | No | — | Kubernetes OCR Job memory request and limit, using Kubernetes quantity syntax such as `2Gi` and `4Gi` |
@@ -71,6 +72,11 @@ Use your deployment secret manager to inject `API_KEY`; do not put a production
 key in the Compose file or source control. Generate a high-entropy key, restrict
 network exposure (the Compose example binds localhost), and terminate TLS at a
 trusted reverse proxy when remote clients need access.
+
+The API host writes structured JSON logs to standard output. Docker and
+Kubernetes collect this output automatically; view it with `docker logs api-host`
+or `kubectl logs deployment/api-host`. Set `LOG_LEVEL` in the `.env` file or as
+a container environment variable to adjust verbosity.
 
 ## Kubernetes deployment
 
@@ -234,7 +240,7 @@ commit it.
 Start the pre-compiled image with the launcher:
 
 ```sh
-TAG=v1.2.1
+TAG=v1.2.2
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```

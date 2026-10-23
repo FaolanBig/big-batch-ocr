@@ -93,7 +93,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: api-host
-          image: ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.1
+          image: ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.2
           ports:
             - name: http
               containerPort: 8080
@@ -105,6 +105,8 @@ spec:
                 secretKeyRef:
                   name: api-host-secrets
                   key: API_KEY
+            - name: LOG_LEVEL
+              value: INFO
             - name: ALLOW_DIRECTORY_ACCESS
               value: "false"
             - name: DATA_ROOT
@@ -112,7 +114,7 @@ spec:
             - name: DATABASE_PATH
               value: /var/lib/api-host/jobs.db
             - name: OCR_IMAGE
-              value: ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1
+              value: ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2
             - name: OCR_JOBS
               value: "12"
             - name: OCR_CPU_REQUEST

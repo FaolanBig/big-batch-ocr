@@ -10,6 +10,11 @@ http:
   url: "{{baseUrl}}/api/v1/jobs/{{jobId}}"
   auth: inherit
 
+runtime:
+  variables:
+    - name: jobId
+      value: job_69850a7de64002814577
+
 settings:
   encodeUrl: true
   timeout: 0

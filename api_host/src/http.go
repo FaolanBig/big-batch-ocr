@@ -87,7 +87,68 @@ func NewAPI(config Config, jobs *JobService, store *JobStore, logger *slog.Logge
 
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	a.mux.ServeHTTP(w, r)
+	recorder := &responseRecorder{ResponseWriter: w}
+	started := time.Now()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !recorder.wroteHeader {
+				recorder.status = http.StatusInternalServerError
+			}
+			a.logRequest(r, recorder, started)
+			panic(recovered)
+		}
+		a.logRequest(r, recorder, started)
+	}()
+	a.mux.ServeHTTP(recorder, r)
+}
+
+func (a *API) logRequest(r *http.Request, response *responseRecorder, started time.Time) {
+	status := response.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	level := slog.LevelInfo
+	if status >= http.StatusInternalServerError {
+		level = slog.LevelError
+	} else if status >= http.StatusBadRequest {
+		level = slog.LevelWarn
+	}
+	a.logger.Log(r.Context(), level, "HTTP request completed",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", status,
+		"bytes_written", response.bytesWritten,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	status       int
+	bytesWritten int64
+	wroteHeader  bool
+}
+
+func (w *responseRecorder) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseRecorder) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(body)
+	w.bytesWritten += int64(n)
+	return n, err
+}
+
+func (w *responseRecorder) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (a *API) authenticate(next http.Handler) http.Handler {

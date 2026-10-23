@@ -79,6 +79,32 @@ func TestAuthenticationAndHealth(t *testing.T) {
 	}
 }
 
+func TestRequestLoggingIncludesOutcomeWithoutQueryString(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	var logs bytes.Buffer
+	api.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/private?token=do-not-log", nil)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("response status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	output := logs.String()
+	for _, expected := range []string{`"method":"GET"`, `"path":"/api/v1/jobs/private"`, `"status":401`} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("request log missing %s: %s", expected, output)
+		}
+	}
+	if strings.Contains(output, "do-not-log") {
+		t.Fatal("request log included the query string")
+	}
+}
+
 func TestAnonymousAccessRequiresExplicitConfiguration(t *testing.T) {
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
 		return 0, nil

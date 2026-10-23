@@ -19,8 +19,14 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck())
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	if err := run(logger); err != nil {
+	defaultLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, err := LoadConfig()
+	if err != nil {
+		defaultLogger.Error("API host stopped with an error", "error", err)
+		os.Exit(1)
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	if err := run(cfg, logger); err != nil {
 		logger.Error("API host stopped with an error", "error", err)
 		os.Exit(1)
 	}
@@ -57,11 +63,8 @@ func healthcheck() int {
 	return 0
 }
 
-func run(logger *slog.Logger) error {
-	cfg, err := LoadConfig()
-	if err != nil {
-		return err
-	}
+func run(cfg Config, logger *slog.Logger) error {
+	var err error
 	logger.Info("selected OCR runtime automatically", "platform", cfg.RuntimePlatform)
 	store, err := OpenJobStore(cfg.DatabasePath)
 	if err != nil {

@@ -62,7 +62,7 @@ ocr_language=""
 ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
-read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1"
+read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2"
 ocr_image="$REPLY"
 while true; do
   image_name="${ocr_image%@*}"
@@ -71,7 +71,7 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.1"
+  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2"
   ocr_image="$REPLY"
 done
 
@@ -130,6 +130,13 @@ while true; do
 done
 read_ocr_optimize
 read_positive_integer "Synchronous wait limit in seconds" "30" sync_wait_limit
+while true; do
+  read_value "API host log level (DEBUG, INFO, WARN, ERROR)" "INFO"
+  case "${REPLY^^}" in
+    DEBUG|INFO|WARN|ERROR) log_level="${REPLY^^}"; break ;;
+    *) printf 'Choose DEBUG, INFO, WARN, or ERROR.\n' >/dev/tty ;;
+  esac
+done
 
 while true; do
   read_value "Allow unauthenticated requests? (not recommended)" "false"
@@ -155,6 +162,7 @@ chmod 600 "$tmp_file"
 {
   printf 'API_KEY=%s\n' "$api_key"
   printf 'OCR_IMAGE=%s\n' "$ocr_image"
+  printf 'LOG_LEVEL=%s\n' "$log_level"
   printf 'ALLOW_ANONYMOUS=%s\n' "$allow_anonymous"
   printf 'ALLOW_DIRECTORY_ACCESS=%s\n' "$allow_directory_access"
   printf 'DOCKER_GID=%s\n' "$docker_gid"
