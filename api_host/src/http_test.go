@@ -370,6 +370,44 @@ func TestMultipartArchiveAcceptsOCROverrides(t *testing.T) {
 	}
 }
 
+func TestMultipartArchiveContentsFieldAcceptsRawTarGzip(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	api.config.AllowDirectoryAccess = false
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", "asynchronous"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("inputArchiveContents", string(testArchive(t, "invoice.pdf", "source"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("archive contents submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	uploadedFile := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID, "input", "invoice.pdf")
+	if content, err := os.ReadFile(uploadedFile); err != nil || string(content) != "source" {
+		t.Fatalf("uploaded archive contents were not extracted: content=%q err=%v", content, err)
+	}
+}
+
 func TestDirectorySubmissionsCanBeDisabledWithoutDisablingArchiveUploads(t *testing.T) {
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
 		return 0, nil

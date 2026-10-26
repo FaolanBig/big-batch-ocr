@@ -795,7 +795,7 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true) or inputArchive for a .tar.gz upload. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true), inputArchive as a .tar.gz file part, or inputArchiveContents as raw .tar.gz bytes in a multipart text field. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
@@ -806,6 +806,10 @@
             "type": "string",
             "format": "binary",
             "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job input/output workspace that remains until explicitly removed with the job DELETE or cleanup endpoint."
+          },
+          "inputArchiveContents": {
+            "type": "string",
+            "description": "Raw .tar.gz bytes in a multipart text field, for integrations such as Workato's Compress files action that expose archive contents rather than a file object. Mutually exclusive with inputArchive and inputPath."
           },
           "outputPath": {
             "type": "string",

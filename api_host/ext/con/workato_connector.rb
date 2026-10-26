@@ -28,12 +28,13 @@
           headers(Authorization: "Bearer #{connection['api_key']}")
         end
       end
-    }
+    },
+    base_uri: lambda do |connection|
+      base_url = connection['base_url'].to_s.strip
+      base_url = "https://#{base_url}" unless base_url.match?(/\Ahttps?:\/\//i)
+      base_url.sub(%r{/+\z}, '')
+    end
   },
-
-  base_uri: lambda do |connection|
-    connection['base_url'].to_s.gsub(/\/+\z/, '')
-  end,
 
   test: lambda do |_connection|
     get('/health')
@@ -188,7 +189,16 @@
             label: 'Input tar.gz archive',
             type: 'string',
             control_type: 'file',
-            optional: false
+            optional: true,
+            hint: 'Upload a .tar.gz file. For Workato file contents, use the Compressed file contents field below.'
+          },
+          {
+            name: 'inputArchiveContents',
+            label: 'Compressed file contents',
+            type: 'string',
+            control_type: 'text',
+            optional: true,
+            hint: 'Map Compressed file contents from File tools by Workato. Configure compression as Gzip and archive format as Tar to produce a .tar.gz archive.'
           },
           {
             name: 'mode',
@@ -229,6 +239,7 @@
       execute: lambda do |_connection, input|
         payload = {
           inputArchive: input['inputArchive'],
+          inputArchiveContents: input['inputArchiveContents'],
           mode: input['mode'],
           outputPath: input['outputPath'],
           createDestination: input['createDestination'],
