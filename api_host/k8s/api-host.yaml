@@ -118,7 +118,7 @@ spec:
             - name: OCR_JOBS
               value: "12"
             - name: OCR_CPU_REQUEST
-              value: "12"
+              value: "10"
             - name: OCR_CPU_LIMIT
               value: "16"
             - name: OCR_MEMORY_REQUEST
