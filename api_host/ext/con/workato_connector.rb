@@ -187,9 +187,10 @@
           {
             name: 'inputArchive',
             label: 'Input tar.gz archive',
-            type: 'string',
+            type: 'object',
             control_type: 'file',
-            optional: false
+            optional: false,
+            hint: 'Map a Workato File datapill, such as the output of Compress multiple files into one file. The archive must be a .tar.gz file.'
           },
           {
             name: 'mode',
