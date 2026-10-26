@@ -80,6 +80,9 @@
               "encoding": {
                 "inputArchive": {
                   "contentType": "application/gzip, application/x-gzip, application/octet-stream"
+                },
+                "inputArchiveContentsBase64": {
+                  "contentType": "text/plain"
                 }
               }
             }
@@ -795,12 +798,12 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: either inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true), inputArchive as a .tar.gz file part, or inputArchiveContents as raw .tar.gz bytes in a multipart text field. For archive uploads, omit outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The compressed request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true), inputArchive as a .tar.gz file part, inputArchiveContents as raw .tar.gz bytes in a multipart text field, or inputArchiveContentsBase64 as standard Base64-encoded .tar.gz bytes in a multipart text field. For archive uploads, omit inputPath and outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The complete request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Existing readable input directory beneath the data root; mutually exclusive with inputArchive and accepted only when ALLOW_DIRECTORY_ACCESS=true."
+            "description": "Existing readable input directory beneath the data root; mutually exclusive with all archive fields and accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "inputArchive": {
             "type": "string",
@@ -810,6 +813,11 @@
           "inputArchiveContents": {
             "type": "string",
             "description": "Raw .tar.gz bytes in a multipart text field, for integrations such as Workato's Compress files action that expose archive contents rather than a file object. Mutually exclusive with inputArchive and inputPath."
+          },
+          "inputArchiveContentsBase64": {
+            "type": "string",
+            "format": "byte",
+            "description": "Standard Base64-encoded .tar.gz bytes in a multipart text field. Mutually exclusive with all other input sources. The API validates and decodes this value before extracting the archive."
           },
           "outputPath": {
             "type": "string",
@@ -849,8 +857,22 @@
               "outputPath"
             ],
             "not": {
-              "required": [
-                "inputArchive"
+              "anyOf": [
+                {
+                  "required": [
+                    "inputArchive"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContents"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContentsBase64"
+                  ]
+                }
               ]
             }
           },
@@ -868,6 +890,74 @@
                 {
                   "required": [
                     "outputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContents"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContentsBase64"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "inputArchiveContents"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "inputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchive"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContentsBase64"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "inputArchiveContentsBase64"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "inputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchive"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContents"
                   ]
                 }
               ]
