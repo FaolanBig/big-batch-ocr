@@ -1,4 +1,5 @@
 {
+  secure_tunnel: true,
   title: 'Big Batch OCR',
 
   connection: {
@@ -124,7 +125,7 @@
             label: 'OCR language(s)',
             type: 'string',
             optional: true,
-            hint: 'Language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
+            hint: 'Up to 128 characters; language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
           },
           {
             name: 'optimize',
@@ -138,13 +139,27 @@
       end,
 
       execute: lambda do |_connection, input|
+        optimize = input['optimize']
+        unless optimize.nil? || (optimize.is_a?(Integer) && (0..3).cover?(optimize))
+          error('Optimization level must be an integer from 0 to 3.')
+        end
+
+        language = input['language']
+        unless language.nil? ||
+               (language.is_a?(String) &&
+                (language.empty? ||
+                 (language.length <= 128 && language.match?(/\A[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*\z/))))
+          error('Language must be up to 128 characters and contain language codes separated by +.')
+        end
+        language = nil if language == ''
+
         payload = {
           inputPath: input['inputPath'],
           outputPath: input['outputPath'],
           mode: input['mode'],
           createDestination: input['createDestination'],
-          language: input['language'],
-          optimize: input['optimize']
+          language: language,
+          optimize: optimize
         }
         payload.delete_if { |_key, value| value.nil? }
 
@@ -198,7 +213,7 @@
             type: 'string',
             control_type: 'text',
             optional: true,
-            hint: 'Map Compressed file contents from File tools by Workato. Configure compression as Gzip and archive format as Tar to produce a .tar.gz archive.'
+            hint: 'Map Compressed file contents from File tools by Workato. Configure compression as Gzip and archive format as Tar. The connector Base64-encodes these bytes; the API host must support inputArchiveContentsBase64.'
           },
           {
             name: 'mode',
@@ -209,21 +224,12 @@
             default: 'asynchronous',
             optional: false
           },
-          { name: 'outputPath', label: 'Output directory', type: 'string', optional: true },
-          {
-            name: 'createDestination',
-            label: 'Create destination if missing',
-            type: 'boolean',
-            control_type: 'checkbox',
-            default: false,
-            optional: true
-          },
           {
             name: 'language',
             label: 'OCR language(s)',
             type: 'string',
             optional: true,
-            hint: 'Language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
+            hint: 'Up to 128 characters; language codes separated by +, for example deu+eng. Leave blank to use the API host default.'
           },
           {
             name: 'optimize',
@@ -231,20 +237,35 @@
             type: 'integer',
             control_type: 'number',
             optional: true,
-            hint: 'A value from 0 to 3. Leave blank to use the API host default.'
+            hint: 'An integer from 0 to 3. Leave blank to use the API host default.'
           }
         ]
       end,
 
       execute: lambda do |_connection, input|
+        optimize = input['optimize']
+        unless optimize.nil? || (optimize.is_a?(Integer) && (0..3).cover?(optimize))
+          error('Optimization level must be an integer from 0 to 3.')
+        end
+
+        language = input['language']
+        unless language.nil? ||
+               (language.is_a?(String) &&
+                (language.empty? ||
+                 (language.length <= 128 && language.match?(/\A[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*\z/))))
+          error('Language must be up to 128 characters and contain language codes separated by +.')
+        end
+        language = nil if language == ''
+
+        archive_contents = input['inputArchiveContents']
+        archive_contents_base64 = Base64.strict_encode64(archive_contents) unless archive_contents.nil?
+
         payload = {
           inputArchive: input['inputArchive'],
-          inputArchiveContents: input['inputArchiveContents'],
+          inputArchiveContentsBase64: archive_contents_base64,
           mode: input['mode'],
-          outputPath: input['outputPath'],
-          createDestination: input['createDestination'],
-          language: input['language'],
-          optimize: input['optimize']
+          language: language,
+          optimize: optimize
         }
         payload.delete_if { |_key, value| value.nil? }
 

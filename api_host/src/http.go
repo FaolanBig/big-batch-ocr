@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -397,9 +398,12 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 		seen[name] = true
 
 		switch name {
-		case "inputArchive", "inputArchiveContents":
+		case "inputArchive", "inputArchiveContents", "inputArchiveContentsBase64":
 			if archiveField != "" {
 				return submitRequest{}, archive, errors.New("only one archive input is allowed")
+			}
+			if name == "inputArchiveContentsBase64" && part.FileName() != "" {
+				return submitRequest{}, archive, errors.New("base64 archive contents must be a text field")
 			}
 			if filename := part.FileName(); filename != "" &&
 				!strings.HasSuffix(strings.ToLower(filename), ".tar.gz") {
@@ -411,7 +415,11 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 				return submitRequest{}, archive, createErr
 			}
 			archive = &archiveUpload{path: file.Name()}
-			_, copyErr := io.Copy(file, part)
+			source := io.Reader(part)
+			if name == "inputArchiveContentsBase64" {
+				source = base64.NewDecoder(base64.StdEncoding.Strict(), part)
+			}
+			_, copyErr := io.Copy(file, source)
 			closeErr := file.Close()
 			if err := errors.Join(copyErr, closeErr); err != nil {
 				return submitRequest{}, archive, err

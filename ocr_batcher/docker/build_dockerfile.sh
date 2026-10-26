@@ -1,1 +1,1 @@
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && sudo docker build -t "ocr_batch_sequencial:v1.2.3-rc" .
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && sudo docker build -t "ocr_batch_sequencial:v1.2.4-rc" .
