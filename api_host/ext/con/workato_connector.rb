@@ -259,9 +259,11 @@
 
         archive_contents = input['inputArchiveContents']
         archive_contents_base64 = Base64.strict_encode64(archive_contents) unless archive_contents.nil?
+        input_archive = input['inputArchive']
+        input_archive = nil if input_archive == ''
 
         payload = {
-          inputArchive: input['inputArchive'],
+          inputArchive: input_archive,
           inputArchiveContentsBase64: archive_contents_base64,
           mode: input['mode'],
           language: language,
