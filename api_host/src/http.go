@@ -205,6 +205,7 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 				"The request body exceeds its size limit.")
 			return
 		}
+		a.logger.Warn("invalid job submission request", "error", err)
 		writeProblem(w, http.StatusBadRequest, "Invalid request", "INVALID_REQUEST",
 			"The request body is not valid for this operation.")
 		return
