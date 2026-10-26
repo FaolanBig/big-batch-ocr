@@ -300,6 +300,12 @@ The archive request body is limited to 1 GiB and its extracted contents to
 escape the archive are rejected. The existing JSON request with `inputPath`
 continues to use the shared-directory workflow and has no uploaded archive.
 
+For Workato's **Compress files** action, map its **Compressed file contents**
+output to the connector's **Compressed file contents** field. Configure the
+action to use **Gzip** compression and **Tar** archive format; the API requires
+a `.tar.gz` archive. The regular **Input tar.gz archive** field remains
+available for file datapills and manual file selection.
+
 After a job succeeds, download its processed files by job ID. The endpoint
 returns a `.tar.gz` archive; polling and downloading both require the same
 bearer credential:

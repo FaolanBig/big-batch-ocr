@@ -19,6 +19,19 @@ import (
 )
 
 const maxRequestBytes int64 = 1 << 30
+const maxMultipartTextFieldBytes int64 = 1 << 20
+
+type archiveUpload struct {
+	path string
+}
+
+func (a *archiveUpload) Open() (io.ReadCloser, error) {
+	return os.Open(a.path)
+}
+
+func (a *archiveUpload) Remove() error {
+	return os.Remove(a.path)
+}
 
 type API struct {
 	config      Config
@@ -177,8 +190,12 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	a.maintenance.RLock()
 	defer a.maintenance.RUnlock()
 	request, archive, err := parseSubmitRequest(w, r)
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
+	if archive != nil {
+		defer func() {
+			if err := archive.Remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
+				a.logger.Warn("could not remove temporary archive upload", "error", err)
+			}
+		}()
 	}
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -301,98 +318,18 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	a.waitSynchronously(w, r, job.ID)
 }
 
-func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, *multipart.FileHeader, error) {
+func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, *archiveUpload, error) {
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil && r.Header.Get("Content-Type") != "" {
 		return submitRequest{}, nil, err
 	}
 	if contentType == "multipart/form-data" {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			return submitRequest{}, nil, err
-		}
-		form := r.MultipartForm
-		for key := range form.Value {
-			switch key {
-			case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize":
-			default:
-				return submitRequest{}, nil, errors.New("unknown multipart field")
-			}
-			if len(form.Value[key]) != 1 {
-				return submitRequest{}, nil, errors.New("multipart field must appear once")
-			}
-		}
-		for key := range form.File {
-			if key != "inputArchive" || len(form.File[key]) != 1 {
-				return submitRequest{}, nil, errors.New("unknown or repeated multipart file field")
-			}
-		}
-		inputPath, err := multipartTextField(r, "inputPath", false)
+		reader, err := r.MultipartReader()
 		if err != nil {
 			return submitRequest{}, nil, err
 		}
-		outputPath, err := multipartTextField(r, "outputPath", false)
-		if err != nil {
-			return submitRequest{}, nil, err
-		}
-		mode, err := multipartTextField(r, "mode", true)
-		if err != nil {
-			return submitRequest{}, nil, err
-		}
-		createDestination, err := multipartTextField(r, "createDestination", false)
-		if err != nil {
-			return submitRequest{}, nil, err
-		}
-		create := false
-		if createDestination != "" {
-			switch strings.ToLower(createDestination) {
-			case "true":
-				create = true
-			case "false":
-			default:
-				return submitRequest{}, nil, errors.New("createDestination must be true or false")
-			}
-		}
-		var language *string
-		if _, exists := form.Value["language"]; exists {
-			value, err := multipartTextField(r, "language", false)
-			if err != nil {
-				return submitRequest{}, nil, err
-			}
-			language = &value
-		}
-		var optimize *int
-		if _, exists := form.Value["optimize"]; exists {
-			value, err := multipartTextField(r, "optimize", false)
-			if err != nil {
-				return submitRequest{}, nil, err
-			}
-			parsed, err := parseOCROptimize(value)
-			if err != nil {
-				return submitRequest{}, nil, errors.New("optimize must be an integer")
-			}
-			optimize = &parsed
-		}
-		var archive *multipart.FileHeader
-		if files := form.File["inputArchive"]; len(files) == 1 {
-			archive = files[0]
-			if !strings.HasSuffix(strings.ToLower(archive.Filename), ".tar.gz") {
-				return submitRequest{}, nil, errors.New("inputArchive must have a .tar.gz filename")
-			}
-			if inputPath != "" {
-				return submitRequest{}, nil, errors.New("inputPath and inputArchive are mutually exclusive")
-			}
-			if outputPath != "" {
-				return submitRequest{}, nil, errors.New("outputPath is assigned internally for uploaded archives")
-			}
-		}
-		if archive == nil && inputPath == "" {
-			return submitRequest{}, nil, errors.New("inputPath is required without inputArchive")
-		}
-		return submitRequest{
-			InputPath: inputPath, OutputPath: outputPath, Mode: mode,
-			CreateDestinationValue: create, Language: language, Optimize: optimize,
-		}, archive, nil
+		return parseMultipartSubmitRequest(reader)
 	}
 
 	if contentType != "" && contentType != "application/json" {
@@ -434,15 +371,109 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 	return request, nil, nil
 }
 
-func multipartTextField(r *http.Request, key string, required bool) (string, error) {
-	values := r.MultipartForm.Value[key]
-	if len(values) == 0 && !required {
-		return "", nil
+func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitRequest, archive *archiveUpload, err error) {
+	defer func() {
+		if err != nil && archive != nil {
+			err = errors.Join(err, archive.Remove())
+			archive = nil
+		}
+	}()
+
+	fields := make(map[string]string)
+	seen := make(map[string]bool)
+	archiveField := ""
+	for {
+		part, nextErr := reader.NextPart()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return submitRequest{}, archive, nextErr
+		}
+		name := part.FormName()
+		if name == "" || seen[name] {
+			return submitRequest{}, archive, errors.New("multipart field is missing a name or repeated")
+		}
+		seen[name] = true
+
+		switch name {
+		case "inputArchive", "inputArchiveContents":
+			if archiveField != "" {
+				return submitRequest{}, archive, errors.New("only one archive input is allowed")
+			}
+			if filename := part.FileName(); filename != "" &&
+				!strings.HasSuffix(strings.ToLower(filename), ".tar.gz") {
+				return submitRequest{}, archive, errors.New("input archive must have a .tar.gz filename")
+			}
+			archiveField = name
+			file, createErr := os.CreateTemp("", "big-batch-ocr-archive-*.tar.gz")
+			if createErr != nil {
+				return submitRequest{}, archive, createErr
+			}
+			archive = &archiveUpload{path: file.Name()}
+			_, copyErr := io.Copy(file, part)
+			closeErr := file.Close()
+			if err := errors.Join(copyErr, closeErr); err != nil {
+				return submitRequest{}, archive, err
+			}
+		case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize":
+			if part.FileName() != "" {
+				return submitRequest{}, archive, errors.New("multipart text field must not be a file")
+			}
+			value, readErr := io.ReadAll(io.LimitReader(part, maxMultipartTextFieldBytes+1))
+			if readErr != nil {
+				return submitRequest{}, archive, readErr
+			}
+			if int64(len(value)) > maxMultipartTextFieldBytes {
+				return submitRequest{}, archive, errors.New("multipart text field is too large")
+			}
+			fields[name] = string(value)
+		default:
+			return submitRequest{}, archive, errors.New("unknown multipart field")
+		}
+		if closeErr := part.Close(); closeErr != nil {
+			return submitRequest{}, archive, closeErr
+		}
 	}
-	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
-		return "", errors.New("multipart text field is missing or repeated")
+
+	inputPath := fields["inputPath"]
+	outputPath := fields["outputPath"]
+	mode := fields["mode"]
+	if strings.TrimSpace(mode) == "" {
+		return submitRequest{}, archive, errors.New("multipart mode is required")
 	}
-	return values[0], nil
+	create := false
+	if createDestination := fields["createDestination"]; createDestination != "" {
+		switch strings.ToLower(createDestination) {
+		case "true":
+			create = true
+		case "false":
+		default:
+			return submitRequest{}, archive, errors.New("createDestination must be true or false")
+		}
+	}
+	if seen["language"] {
+		value := fields["language"]
+		request.Language = &value
+	}
+	if seen["optimize"] {
+		parsed, parseErr := parseOCROptimize(fields["optimize"])
+		if parseErr != nil {
+			return submitRequest{}, archive, errors.New("optimize must be an integer")
+		}
+		request.Optimize = &parsed
+	}
+	if archive != nil && (inputPath != "" || outputPath != "") {
+		return submitRequest{}, archive, errors.New("archive uploads cannot include inputPath or outputPath")
+	}
+	if archive == nil && inputPath == "" {
+		return submitRequest{}, nil, errors.New("inputPath is required without inputArchive")
+	}
+	request = submitRequest{
+		InputPath: inputPath, OutputPath: outputPath, Mode: mode,
+		CreateDestinationValue: create, Language: request.Language, Optimize: request.Optimize,
+	}
+	return request, archive, nil
 }
 
 func createJobWorkspace(dataRoot, jobID string) (string, error) {

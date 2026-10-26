@@ -187,10 +187,18 @@
           {
             name: 'inputArchive',
             label: 'Input tar.gz archive',
-            type: 'object',
+            type: 'string',
             control_type: 'file',
-            optional: false,
-            hint: 'Map a Workato File datapill, such as the output of Compress multiple files into one file. The archive must be a .tar.gz file.'
+            optional: true,
+            hint: 'Upload a .tar.gz file. For Workato file contents, use the Compressed file contents field below.'
+          },
+          {
+            name: 'inputArchiveContents',
+            label: 'Compressed file contents',
+            type: 'string',
+            control_type: 'text',
+            optional: true,
+            hint: 'Map Compressed file contents from File tools by Workato. Configure compression as Gzip and archive format as Tar to produce a .tar.gz archive.'
           },
           {
             name: 'mode',
@@ -231,6 +239,7 @@
       execute: lambda do |_connection, input|
         payload = {
           inputArchive: input['inputArchive'],
+          inputArchiveContents: input['inputArchiveContents'],
           mode: input['mode'],
           outputPath: input['outputPath'],
           createDestination: input['createDestination'],
