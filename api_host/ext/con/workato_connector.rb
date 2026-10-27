@@ -285,7 +285,7 @@
           payload.delete_if { |_key, value| value.nil? }
 
           post('/api/v1/jobs', payload)
-            .request_format_multipart_form_data
+            .request_format_multipart_form
             .after_response do |code, body, response_headers|
               acknowledgement = body.is_a?(Hash) ? body : {}
               {
