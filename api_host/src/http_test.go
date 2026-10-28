@@ -1034,6 +1034,140 @@ func TestSynchronousTimeoutDoesNotCancelJob(t *testing.T) {
 	t.Fatal("timed-out synchronous job did not continue to completion")
 }
 
+func TestJobCompletionCallsWebhookWithOptionalHeaders(t *testing.T) {
+	type callback struct {
+		secret   string
+		rootPath string
+		body     map[string]any
+	}
+	callbacks := make(chan callback, 1)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		callbacks <- callback{
+			secret:   r.Header.Get("X-Webhook-Secret"),
+			rootPath: r.Header.Get("X-Root-Path"),
+			body:     body,
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`","webhookSecret":"automation-secret","rootPath":"/srv/ocr/results"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case received := <-callbacks:
+		if received.secret != "automation-secret" || received.rootPath != "/srv/ocr/results" {
+			t.Fatalf("webhook headers = secret %q, root path %q", received.secret, received.rootPath)
+		}
+		if received.body["jobId"] != accepted.JobID || received.body["status"] != "succeeded" {
+			t.Fatalf("webhook payload = %#v", received.body)
+		}
+		if _, includesSecret := received.body["webhookSecret"]; includesSecret {
+			t.Fatal("webhook payload exposed the configured secret")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("job completion webhook was not called")
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.WebhookURL != webhook.URL || job.WebhookSecret != "automation-secret" || job.RootPath != "/srv/ocr/results" {
+		t.Fatalf("webhook options were not persisted: %#v", job)
+	}
+}
+
+func TestWebhookOptionsAreValidatedAndRequireAURL(t *testing.T) {
+	called := false
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		called = true
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	for _, body := range []string{
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"file:///tmp/callback"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookSecret":"secret-without-url"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"http://example.test","rootPath":"bad\r\npath"}`,
+	} {
+		response := submitTestJob(api, body)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_WEBHOOK_OPTIONS") {
+			t.Fatalf("invalid webhook options response = %d, body: %s", response.Code, response.Body.String())
+		}
+	}
+	if called {
+		t.Fatal("invalid webhook options started an OCR job")
+	}
+}
+
+func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
+	callback := make(chan http.Header, 1)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callback <- r.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		if job.WebhookURL != webhook.URL || job.WebhookSecret != "archive-secret" || job.RootPath != "/automation/output" {
+			return 1, errors.New("multipart webhook options were not passed to the job")
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	body, contentType := multipartArchiveRequestWithFields(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous", map[string]string{
+		"webhookUrl": webhook.URL, "webhookSecret": "archive-secret", "rootPath": "/automation/output",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("multipart submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case headers := <-callback:
+		if headers.Get("X-Webhook-Secret") != "archive-secret" || headers.Get("X-Root-Path") != "/automation/output" {
+			t.Fatalf("callback headers = %#v", headers)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("multipart job completion webhook was not called")
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "succeeded" {
+		t.Fatalf("multipart job status = %q", job.Status)
+	}
+}
+
 func TestInvalidPathsNeverSubmitAndUnknownFieldsAreRejected(t *testing.T) {
 	called := false
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
@@ -1241,8 +1375,12 @@ func TestJobPersistsAcrossStoreReopenAndRecoveryFailsActiveState(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != "docker-id" {
 		t.Fatalf("interrupted container ids = %v, err = %v", ids, err)
 	}
-	if err := store.RecoverInterrupted(); err != nil {
+	recoveredJobs, err := store.RecoverInterrupted()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(recoveredJobs) != 1 || recoveredJobs[0].ID != job.ID {
+		t.Fatalf("recovered jobs = %#v, want job %q", recoveredJobs, job.ID)
 	}
 	recovered, err := store.Get(job.ID)
 	if err != nil {

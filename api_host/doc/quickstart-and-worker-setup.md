@@ -263,6 +263,31 @@ from untrusted input. A `failed` job is a valid job resource; check its `error`
 and `exitCode` fields. Do not resubmit just because a client times out or
 disconnects after acceptance.
 
+#### Completion webhooks
+
+Any submission can include `webhookUrl` to have the API host POST the final
+job resource as JSON when the job reaches a terminal state. This works with
+JSON and multipart submissions and does not replace polling or result
+downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
+only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
+included in the JSON body. Both values require `webhookUrl`.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","webhookUrl":"https://automation.example.com/ocr/finished","webhookSecret":"replace-with-a-shared-secret","rootPath":"/srv/automation/ocr-results"}' \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+The callback includes the terminal `status` (`succeeded`, `failed`, or
+`cancelled`) and the same public job fields returned by the status endpoint.
+Webhook delivery is best-effort: the host makes one request attempt with a
+10-second timeout, does not follow redirects, and logs failures without
+changing the job outcome. Use HTTPS and verify the shared-secret header in
+the automation endpoint. `rootPath` is an opaque destination value for the
+automation; it is not interpreted as a path by the API host.
+
 For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
 up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
 the processed `.tar.gz` archive (with the job ID in the `X-Job-ID` header) or a

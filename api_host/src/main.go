@@ -93,11 +93,15 @@ func run(cfg Config, logger *slog.Logger) error {
 			logger.Warn("could not stop OCR container from interrupted job", "container_id", id, "error_type", fmt.Sprintf("%T", err))
 		}
 	}
-	if err := store.RecoverInterrupted(); err != nil {
+	recovered, err := store.RecoverInterrupted()
+	if err != nil {
 		return err
 	}
 
 	jobs := NewJobService(store, executor, cfg.MaxConcurrentJobs, logger)
+	for _, job := range recovered {
+		jobs.notifyWebhook(job)
+	}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           NewAPI(cfg, jobs, store, logger),

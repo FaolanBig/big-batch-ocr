@@ -134,6 +134,29 @@
               control_type: 'number',
               optional: true,
               hint: 'A value from 0 to 3. Leave blank to use the API host default.'
+            },
+            {
+              name: 'webhookUrl',
+              label: 'Completion webhook URL',
+              type: 'string',
+              control_type: 'url',
+              optional: true,
+              hint: 'The API host sends a POST with the final job status when processing finishes.'
+            },
+            {
+              name: 'webhookSecret',
+              label: 'Webhook secret',
+              type: 'string',
+              control_type: 'password',
+              optional: true,
+              hint: 'Sent in the X-Webhook-Secret header. Requires a completion webhook URL.'
+            },
+            {
+              name: 'rootPath',
+              label: 'Webhook root path',
+              type: 'string',
+              optional: true,
+              hint: 'Sent in the X-Root-Path header so the automation can locate the OCR result files. Requires a completion webhook URL.'
             }
           ]
         end,
@@ -159,7 +182,10 @@
             mode: input['mode'],
             createDestination: input['createDestination'],
             language: language,
-            optimize: optimize
+            optimize: optimize,
+            webhookUrl: input['webhookUrl'],
+            webhookSecret: input['webhookSecret'],
+            rootPath: input['rootPath']
           }
           payload.delete_if { |_key, value| value.nil? }
 
@@ -238,6 +264,29 @@
               control_type: 'number',
               optional: true,
               hint: 'An integer from 0 to 3. Leave blank to use the API host default.'
+            },
+            {
+              name: 'webhookUrl',
+              label: 'Completion webhook URL',
+              type: 'string',
+              control_type: 'url',
+              optional: true,
+              hint: 'The API host sends a POST with the final job status when processing finishes.'
+            },
+            {
+              name: 'webhookSecret',
+              label: 'Webhook secret',
+              type: 'string',
+              control_type: 'password',
+              optional: true,
+              hint: 'Sent in the X-Webhook-Secret header. Requires a completion webhook URL.'
+            },
+            {
+              name: 'rootPath',
+              label: 'Webhook root path',
+              type: 'string',
+              optional: true,
+              hint: 'Sent in the X-Root-Path header so the automation can locate the OCR result files. Requires a completion webhook URL.'
             }
           ]
         end,
@@ -280,7 +329,10 @@
             inputArchiveContentsBase64: archive_contents_base64,
             mode: input['mode'],
             language: language,
-            optimize: optimize
+            optimize: optimize,
+            webhookUrl: input['webhookUrl'],
+            webhookSecret: input['webhookSecret'],
+            rootPath: input['rootPath']
           }
           payload.delete_if { |_key, value| value.nil? }
 

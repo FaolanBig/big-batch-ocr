@@ -291,6 +291,13 @@ accept arbitrary OCRmyPDF or Docker arguments. For example, use
 `"language":"deu+eng","optimize":2` in JSON, or the corresponding multipart
 fields for an archive upload.
 
+Submissions can also set `webhookUrl` to receive the final job status via
+POST. Optional `webhookSecret` and `rootPath` values are sent in the
+`X-Webhook-Secret` and `X-Root-Path` callback headers, and require a webhook
+URL. Delivery is best-effort with one attempt; see the
+[webhook quickstart](quickstart-and-worker-setup.md#completion-webhooks) for
+the payload and example.
+
 For synchronous execution, set `"mode":"synchronous"`. On success the host
 returns `200` with the processed `.tar.gz` archive in the response body and
 the completed job ID in the `X-Job-ID` header; a container failure returns a
