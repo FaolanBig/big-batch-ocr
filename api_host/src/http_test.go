@@ -1079,6 +1079,9 @@ func TestJobCompletionCallsWebhookWithOptionalHeaders(t *testing.T) {
 		if received.body["jobId"] != accepted.JobID || received.body["status"] != "succeeded" {
 			t.Fatalf("webhook payload = %#v", received.body)
 		}
+		if received.body["rootPath"] != "/srv/ocr/results" {
+			t.Fatalf("webhook payload omitted rootPath: %#v", received.body)
+		}
 		if _, includesSecret := received.body["webhookSecret"]; includesSecret {
 			t.Fatal("webhook payload exposed the configured secret")
 		}
@@ -1118,9 +1121,17 @@ func TestWebhookOptionsAreValidatedAndRequireAURL(t *testing.T) {
 }
 
 func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
-	callback := make(chan http.Header, 1)
+	type callback struct {
+		headers http.Header
+		body    map[string]any
+	}
+	callbacks := make(chan callback, 1)
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callback <- r.Header.Clone()
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		callbacks <- callback{headers: r.Header.Clone(), body: body}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer webhook.Close()
@@ -1152,9 +1163,12 @@ func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case headers := <-callback:
-		if headers.Get("X-Webhook-Secret") != "archive-secret" || headers.Get("X-Root-Path") != "/automation/output" {
-			t.Fatalf("callback headers = %#v", headers)
+	case received := <-callbacks:
+		if received.headers.Get("X-Webhook-Secret") != "archive-secret" || received.headers.Get("X-Root-Path") != "/automation/output" {
+			t.Fatalf("callback headers = %#v", received.headers)
+		}
+		if received.body["rootPath"] != "/automation/output" {
+			t.Fatalf("callback body omitted rootPath: %#v", received.body)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("multipart job completion webhook was not called")

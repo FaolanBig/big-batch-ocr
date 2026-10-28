@@ -693,7 +693,10 @@ func (s *JobService) notifyWebhook(job Job) {
 		return
 	}
 	go func() {
-		body, err := json.Marshal(job)
+		body, err := json.Marshal(struct {
+			Job
+			RootPath string `json:"rootPath,omitempty"`
+		}{Job: job, RootPath: job.RootPath})
 		if err != nil {
 			s.logger.Error("could not encode OCR job webhook", "job_id", job.ID, "error", err)
 			return

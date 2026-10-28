@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. Optional completion webhooks POST the final job status and may include X-Webhook-Secret and X-Root-Path headers. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. Optional completion webhooks POST the final job status and include the configured rootPath in the JSON body; they may also include X-Webhook-Secret and X-Root-Path headers. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -35,7 +35,7 @@
         ],
         "operationId": "submitOcrJob",
         "summary": "Submit an OCR job",
-        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. An optional webhookUrl receives one POST with the final job status after the job reaches a terminal state. webhookSecret and rootPath are optional and require webhookUrl; they are sent as X-Webhook-Secret and X-Root-Path headers, respectively. Webhook delivery is best-effort, with one request attempt and no retry; callback failures are logged and do not change the job outcome. Synchronous mode waits for the container to finish and returns the resulting tar.gz archive directly, with the job ID in the X-Job-ID response header. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
+        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. An optional webhookUrl receives one POST with the final job status after the job reaches a terminal state. webhookSecret and rootPath are optional and require webhookUrl; they are sent as X-Webhook-Secret and X-Root-Path headers, respectively, and rootPath is also included as a rootPath property in the webhook JSON body. Webhook delivery is best-effort, with one request attempt and no retry; callback failures are logged and do not change the job outcome. Synchronous mode waits for the container to finish and returns the resulting tar.gz archive directly, with the job ID in the X-Job-ID response header. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
         "requestBody": {
           "required": true,
           "content": {
@@ -808,7 +808,7 @@
           "rootPath": {
             "type": "string",
             "maxLength": 4096,
-            "description": "Optional automation destination root path sent in the X-Root-Path callback header. Requires webhookUrl."
+            "description": "Optional automation destination root path included as rootPath in the webhook JSON body and sent in the X-Root-Path callback header. Requires webhookUrl."
           }
         }
       },
