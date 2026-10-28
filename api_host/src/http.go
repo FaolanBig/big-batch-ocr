@@ -12,6 +12,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,9 @@ type submitRequest struct {
 	CreateDestination      json.RawMessage `json:"createDestination"`
 	LanguageValue          json.RawMessage `json:"language"`
 	OptimizeValue          json.RawMessage `json:"optimize"`
+	WebhookURL             string          `json:"webhookUrl"`
+	WebhookSecret          string          `json:"webhookSecret"`
+	RootPath               string          `json:"rootPath"`
 	Language               *string         `json:"-"`
 	Optimize               *int            `json:"-"`
 	CreateDestinationValue bool            `json:"-"`
@@ -227,6 +231,13 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := validateWebhookOptions(request.WebhookURL, request.WebhookSecret, request.RootPath); err != nil {
+		writeProblem(w, http.StatusBadRequest, "Invalid webhook options", "INVALID_WEBHOOK_OPTIONS", err.Error())
+		return
+	}
+	options.WebhookURL = request.WebhookURL
+	options.WebhookSecret = request.WebhookSecret
+	options.RootPath = request.RootPath
 	if archive == nil && !a.config.AllowDirectoryAccess {
 		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
 			"Directory-based submissions are disabled; upload an inputArchive instead.")
@@ -425,7 +436,8 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 			if err := errors.Join(copyErr, closeErr); err != nil {
 				return submitRequest{}, archive, err
 			}
-		case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize":
+		case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize",
+			"webhookUrl", "webhookSecret", "rootPath":
 			if part.FileName() != "" {
 				return submitRequest{}, archive, errors.New("multipart text field must not be a file")
 			}
@@ -481,8 +493,42 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 	request = submitRequest{
 		InputPath: inputPath, OutputPath: outputPath, Mode: mode,
 		CreateDestinationValue: create, Language: request.Language, Optimize: request.Optimize,
+		WebhookURL: fields["webhookUrl"], WebhookSecret: fields["webhookSecret"], RootPath: fields["rootPath"],
 	}
 	return request, archive, nil
+}
+
+func validateWebhookOptions(webhookURL, webhookSecret, rootPath string) error {
+	if webhookURL == "" {
+		if webhookSecret != "" || rootPath != "" {
+			return errors.New("webhookSecret and rootPath require webhookUrl")
+		}
+		return nil
+	}
+	if len(webhookURL) > 2048 {
+		return errors.New("webhookUrl must not exceed 2048 characters")
+	}
+	parsed, err := url.Parse(webhookURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("webhookUrl must be an absolute HTTP or HTTPS URL without user information or a fragment")
+	}
+	if len(webhookSecret) > 4096 || hasHeaderControlCharacters(webhookSecret) {
+		return errors.New("webhookSecret must be at most 4096 characters and contain no control characters")
+	}
+	if len(rootPath) > 4096 || hasHeaderControlCharacters(rootPath) {
+		return errors.New("rootPath must be at most 4096 characters and contain no control characters")
+	}
+	return nil
+}
+
+func hasHeaderControlCharacters(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func createJobWorkspace(dataRoot, jobID string) (string, error) {

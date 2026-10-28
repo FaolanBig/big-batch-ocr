@@ -55,7 +55,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
-For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.4-rc`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.6-rc`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -146,11 +146,11 @@ the Docker host.
 
 Use the pre-compiled API-host image from
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Select a published release tag (the example below uses `v1.2.4-rc`), then pull and
+Select a published release tag (the example below uses `v1.2.6-rc`), then pull and
 start it:
 
 ```sh
-TAG=v1.2.4-rc
+TAG=v1.2.6-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
@@ -262,6 +262,31 @@ Use the status URL returned by the API rather than constructing a host path
 from untrusted input. A `failed` job is a valid job resource; check its `error`
 and `exitCode` fields. Do not resubmit just because a client times out or
 disconnects after acceptance.
+
+#### Completion webhooks
+
+Any submission can include `webhookUrl` to have the API host POST the final
+job resource as JSON when the job reaches a terminal state. This works with
+JSON and multipart submissions and does not replace polling or result
+downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
+only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
+included in the JSON body. Both values require `webhookUrl`.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","webhookUrl":"https://automation.example.com/ocr/finished","webhookSecret":"replace-with-a-shared-secret","rootPath":"/srv/automation/ocr-results"}' \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+The callback includes the terminal `status` (`succeeded`, `failed`, or
+`cancelled`) and the same public job fields returned by the status endpoint.
+Webhook delivery is best-effort: the host makes one request attempt with a
+10-second timeout, does not follow redirects, and logs failures without
+changing the job outcome. Use HTTPS and verify the shared-secret header in
+the automation endpoint. `rootPath` is an opaque destination value for the
+automation; it is not interpreted as a path by the API host.
 
 For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
 up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
