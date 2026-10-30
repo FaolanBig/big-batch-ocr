@@ -55,7 +55,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
-For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.7-rc`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.8-rc`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -146,11 +146,11 @@ the Docker host.
 
 Use the pre-compiled API-host image from
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Select a published release tag (the example below uses `v1.2.7-rc`), then pull and
+Select a published release tag (the example below uses `v1.2.8-rc`), then pull and
 start it:
 
 ```sh
-TAG=v1.2.7-rc
+TAG=v1.2.8-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
@@ -270,7 +270,11 @@ job resource as JSON when the job reaches a terminal state. This works with
 JSON and multipart submissions and does not replace polling or result
 downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
 only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
-included in the JSON body. Both values require `webhookUrl`.
+included in the JSON body. Both values require `webhookUrl`. HTTPS certificate
+verification is enabled by default. For a trusted webhook using a self-signed
+certificate, set `webhookInsecureSkipVerify` to `true`; this disables
+certificate verification for that webhook request only and also requires
+`webhookUrl`. Use this option only when you trust the webhook endpoint.
 
 ```sh
 curl --fail-with-body --silent --show-error \

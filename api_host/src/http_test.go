@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
@@ -1092,8 +1093,69 @@ func TestJobCompletionCallsWebhookWithOptionalHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.WebhookURL != webhook.URL || job.WebhookSecret != "automation-secret" || job.RootPath != "/srv/ocr/results" {
+	if job.WebhookURL != webhook.URL || job.WebhookSecret != "automation-secret" ||
+		job.RootPath != "/srv/ocr/results" || job.WebhookInsecureSkipVerify {
 		t.Fatalf("webhook options were not persisted: %#v", job)
+	}
+}
+
+func TestWebhookInsecureSkipVerifyIsOptIn(t *testing.T) {
+	callbacks := make(chan struct{}, 1)
+	webhook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callbacks <- struct{}{}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	webhook.Config.ErrorLog = log.New(io.Discard, "", 0)
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("default-verification submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var defaultAccepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &defaultAccepted); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.Get(defaultAccepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.WebhookInsecureSkipVerify {
+		t.Fatal("webhook certificate verification was disabled by default")
+	}
+	select {
+	case <-callbacks:
+		t.Fatal("webhook with an untrusted certificate was called when verification was enabled")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	response = submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`","webhookInsecureSkipVerify":true}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("skip-verification submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var insecureAccepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &insecureAccepted); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Get(insecureAccepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !job.WebhookInsecureSkipVerify {
+		t.Fatal("webhook certificate verification option was not persisted")
+	}
+	select {
+	case <-callbacks:
+	case <-time.After(2 * time.Second):
+		t.Fatal("webhook with a self-signed certificate was not called when verification was disabled")
 	}
 }
 
@@ -1109,11 +1171,16 @@ func TestWebhookOptionsAreValidatedAndRequireAURL(t *testing.T) {
 		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"file:///tmp/callback"}`,
 		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookSecret":"secret-without-url"}`,
 		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"http://example.test","rootPath":"bad\r\npath"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookInsecureSkipVerify":true}`,
 	} {
 		response := submitTestJob(api, body)
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_WEBHOOK_OPTIONS") {
 			t.Fatalf("invalid webhook options response = %d, body: %s", response.Code, response.Body.String())
 		}
+	}
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"http://example.test","webhookInsecureSkipVerify":null}`)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_REQUEST") {
+		t.Fatalf("null webhookInsecureSkipVerify response = %d, body: %s", response.Code, response.Body.String())
 	}
 	if called {
 		t.Fatal("invalid webhook options started an OCR job")
@@ -1140,7 +1207,8 @@ func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
 		if err := markRunning("container-id"); err != nil {
 			return 1, err
 		}
-		if job.WebhookURL != webhook.URL || job.WebhookSecret != "archive-secret" || job.RootPath != "/automation/output" {
+		if job.WebhookURL != webhook.URL || job.WebhookSecret != "archive-secret" ||
+			job.RootPath != "/automation/output" || !job.WebhookInsecureSkipVerify {
 			return 1, errors.New("multipart webhook options were not passed to the job")
 		}
 		return 0, nil
@@ -1149,6 +1217,7 @@ func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
 
 	body, contentType := multipartArchiveRequestWithFields(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous", map[string]string{
 		"webhookUrl": webhook.URL, "webhookSecret": "archive-secret", "rootPath": "/automation/output",
+		"webhookInsecureSkipVerify": "true",
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
 	request.Header.Set("Content-Type", contentType)

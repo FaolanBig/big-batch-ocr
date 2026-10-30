@@ -54,10 +54,13 @@ func TestJobStoreMigratesAndPersistsOCROptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacy.OCRLanguage != "eng" || legacy.OCROptimize != 3 {
-		t.Fatalf("legacy job defaults = %q/%d", legacy.OCRLanguage, legacy.OCROptimize)
+	if legacy.OCRLanguage != "eng" || legacy.OCROptimize != 3 || legacy.WebhookInsecureSkipVerify {
+		t.Fatalf("legacy job defaults = %q/%d, insecure webhook TLS = %t",
+			legacy.OCRLanguage, legacy.OCROptimize, legacy.WebhookInsecureSkipVerify)
 	}
-	created, err := store.Create("in", "out", "/in", "/out", OCROptions{Language: "deu+eng", Optimize: 0})
+	created, err := store.Create("in", "out", "/in", "/out", OCROptions{
+		Language: "deu+eng", Optimize: 0, WebhookInsecureSkipVerify: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +68,9 @@ func TestJobStoreMigratesAndPersistsOCROptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.OCRLanguage != "deu+eng" || reloaded.OCROptimize != 0 {
-		t.Fatalf("reloaded job OCR options = %q/%d", reloaded.OCRLanguage, reloaded.OCROptimize)
+	if reloaded.OCRLanguage != "deu+eng" || reloaded.OCROptimize != 0 || !reloaded.WebhookInsecureSkipVerify {
+		t.Fatalf("reloaded job options = OCR %q/%d, insecure webhook TLS %t",
+			reloaded.OCRLanguage, reloaded.OCROptimize, reloaded.WebhookInsecureSkipVerify)
 	}
 }
 
