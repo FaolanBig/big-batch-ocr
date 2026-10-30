@@ -62,7 +62,7 @@ ocr_language=""
 ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
-read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.8-rc"
+read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9-rc"
 ocr_image="$REPLY"
 while true; do
   image_name="${ocr_image%@*}"
@@ -71,7 +71,7 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.8-rc"
+  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9-rc"
   ocr_image="$REPLY"
 done
 
