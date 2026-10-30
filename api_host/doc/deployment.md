@@ -35,6 +35,12 @@ certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
 BuildKit secret. The CA is mounted only while Go downloads modules; it is not
 copied into the resulting image. Neither script reads the runtime `.env`.
 
+The API-host image includes `/bin/sh` and `curl` for troubleshooting outbound
+connections from the same container network. For example, open a shell in a
+running Docker container with `sudo docker exec -it api-host /bin/sh`, or in a
+Kubernetes pod with `kubectl exec -it deployment/api-host -- /bin/sh`. The
+image still runs the API host as a non-root user.
+
 The same runtime setup works for either image because the CA secret only
 changes how dependencies are downloaded during the build. The launcher
 selects the sole locally available direct/proxied image automatically, or
