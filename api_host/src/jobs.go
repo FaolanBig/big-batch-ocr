@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -36,23 +37,25 @@ type Job struct {
 	Error       *JobError  `json:"error"`
 	StatusURL   string     `json:"statusUrl"`
 
-	InputHost     string `json:"-"`
-	OutputHost    string `json:"-"`
-	ContainerID   string `json:"-"`
-	ContainerLogs string `json:"-"`
-	OCRLanguage   string `json:"-"`
-	OCROptimize   int    `json:"-"`
-	WebhookURL    string `json:"-"`
-	WebhookSecret string `json:"-"`
-	RootPath      string `json:"-"`
+	InputHost                 string `json:"-"`
+	OutputHost                string `json:"-"`
+	ContainerID               string `json:"-"`
+	ContainerLogs             string `json:"-"`
+	OCRLanguage               string `json:"-"`
+	OCROptimize               int    `json:"-"`
+	WebhookURL                string `json:"-"`
+	WebhookSecret             string `json:"-"`
+	RootPath                  string `json:"-"`
+	WebhookInsecureSkipVerify bool   `json:"-"`
 }
 
 type OCROptions struct {
-	Language      string
-	Optimize      int
-	WebhookURL    string
-	WebhookSecret string
-	RootPath      string
+	Language                  string
+	Optimize                  int
+	WebhookURL                string
+	WebhookSecret             string
+	RootPath                  string
+	WebhookInsecureSkipVerify bool
 }
 
 type Executor interface {
@@ -96,7 +99,8 @@ func OpenJobStore(path string) (*JobStore, error) {
 			ocr_optimize INTEGER NOT NULL DEFAULT 3,
 			webhook_url TEXT NOT NULL DEFAULT '',
 			webhook_secret TEXT NOT NULL DEFAULT '',
-			root_path TEXT NOT NULL DEFAULT ''
+			root_path TEXT NOT NULL DEFAULT '',
+			webhook_insecure_skip_verify INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, queue_order);`); err != nil {
 		db.Close()
@@ -153,6 +157,7 @@ func ensureJobColumns(db *sql.DB) error {
 		{name: "webhook_url", sql: `ALTER TABLE jobs ADD COLUMN webhook_url TEXT NOT NULL DEFAULT ''`},
 		{name: "webhook_secret", sql: `ALTER TABLE jobs ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''`},
 		{name: "root_path", sql: `ALTER TABLE jobs ADD COLUMN root_path TEXT NOT NULL DEFAULT ''`},
+		{name: "webhook_insecure_skip_verify", sql: `ALTER TABLE jobs ADD COLUMN webhook_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if !columns[column.name] {
 			if _, err := db.Exec(column.sql); err != nil {
@@ -177,10 +182,10 @@ func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string,
 	ocrOptions := defaultOCROptions(options)
 	created := time.Now().UTC()
 	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,
-		ocr_language,ocr_optimize,webhook_url,webhook_secret,root_path)
-		VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ocr_language,ocr_optimize,webhook_url,webhook_secret,root_path,webhook_insecure_skip_verify)
+		VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, input, output, inputHost, outputHost, formatDBTime(created), ocrOptions.Language, ocrOptions.Optimize,
-		ocrOptions.WebhookURL, ocrOptions.WebhookSecret, ocrOptions.RootPath)
+		ocrOptions.WebhookURL, ocrOptions.WebhookSecret, ocrOptions.RootPath, ocrOptions.WebhookInsecureSkipVerify)
 	if err != nil {
 		return Job{}, fmt.Errorf("persist queued job: %w", err)
 	}
@@ -189,6 +194,7 @@ func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string,
 		CreatedAt: created, StatusURL: statusURL(id), InputHost: inputHost, OutputHost: outputHost,
 		OCRLanguage: ocrOptions.Language, OCROptimize: ocrOptions.Optimize,
 		WebhookURL: ocrOptions.WebhookURL, WebhookSecret: ocrOptions.WebhookSecret, RootPath: ocrOptions.RootPath,
+		WebhookInsecureSkipVerify: ocrOptions.WebhookInsecureSkipVerify,
 	}, nil
 }
 
@@ -207,11 +213,12 @@ func (s *JobStore) Get(id string) (Job, error) {
 	var errorCode, errorMessage, containerID, containerLogs sql.NullString
 	err := s.db.QueryRow(`SELECT id,status,input_path,output_path,input_host,output_host,created_at,
 		started_at,completed_at,exit_code,error_code,error_message,container_id,container_logs,ocr_language,ocr_optimize,
-		webhook_url,webhook_secret,root_path
+		webhook_url,webhook_secret,root_path,webhook_insecure_skip_verify
 		FROM jobs WHERE id=?`, id).
 		Scan(&job.ID, &job.Status, &job.InputPath, &job.OutputPath, &job.InputHost, &job.OutputHost,
 			&created, &started, &completed, &exitCode, &errorCode, &errorMessage, &containerID, &containerLogs,
-			&job.OCRLanguage, &job.OCROptimize, &job.WebhookURL, &job.WebhookSecret, &job.RootPath)
+			&job.OCRLanguage, &job.OCROptimize, &job.WebhookURL, &job.WebhookSecret, &job.RootPath,
+			&job.WebhookInsecureSkipVerify)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, sql.ErrNoRows
 	}
@@ -718,6 +725,11 @@ func (s *JobService) notifyWebhook(job Job) {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		}
+		if job.WebhookInsecureSkipVerify {
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			client.Transport = transport
 		}
 		response, err := client.Do(request)
 		if err != nil {

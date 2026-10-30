@@ -45,18 +45,20 @@ type API struct {
 }
 
 type submitRequest struct {
-	InputPath              string          `json:"inputPath"`
-	OutputPath             string          `json:"outputPath"`
-	Mode                   string          `json:"mode"`
-	CreateDestination      json.RawMessage `json:"createDestination"`
-	LanguageValue          json.RawMessage `json:"language"`
-	OptimizeValue          json.RawMessage `json:"optimize"`
-	WebhookURL             string          `json:"webhookUrl"`
-	WebhookSecret          string          `json:"webhookSecret"`
-	RootPath               string          `json:"rootPath"`
-	Language               *string         `json:"-"`
-	Optimize               *int            `json:"-"`
-	CreateDestinationValue bool            `json:"-"`
+	InputPath                      string          `json:"inputPath"`
+	OutputPath                     string          `json:"outputPath"`
+	Mode                           string          `json:"mode"`
+	CreateDestination              json.RawMessage `json:"createDestination"`
+	LanguageValue                  json.RawMessage `json:"language"`
+	OptimizeValue                  json.RawMessage `json:"optimize"`
+	WebhookURL                     string          `json:"webhookUrl"`
+	WebhookSecret                  string          `json:"webhookSecret"`
+	RootPath                       string          `json:"rootPath"`
+	WebhookInsecureSkipVerifyValue json.RawMessage `json:"webhookInsecureSkipVerify"`
+	WebhookInsecureSkipVerify      bool            `json:"-"`
+	Language                       *string         `json:"-"`
+	Optimize                       *int            `json:"-"`
+	CreateDestinationValue         bool            `json:"-"`
 }
 
 type acknowledgement struct {
@@ -231,13 +233,15 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := validateWebhookOptions(request.WebhookURL, request.WebhookSecret, request.RootPath); err != nil {
+	if err := validateWebhookOptions(request.WebhookURL, request.WebhookSecret, request.RootPath,
+		request.WebhookInsecureSkipVerify); err != nil {
 		writeProblem(w, http.StatusBadRequest, "Invalid webhook options", "INVALID_WEBHOOK_OPTIONS", err.Error())
 		return
 	}
 	options.WebhookURL = request.WebhookURL
 	options.WebhookSecret = request.WebhookSecret
 	options.RootPath = request.RootPath
+	options.WebhookInsecureSkipVerify = request.WebhookInsecureSkipVerify
 	if archive == nil && !a.config.AllowDirectoryAccess {
 		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
 			"Directory-based submissions are disabled; upload an inputArchive instead.")
@@ -381,6 +385,13 @@ func parseSubmitRequest(w http.ResponseWriter, r *http.Request) (submitRequest, 
 		}
 		request.Optimize = &optimize
 	}
+	if len(request.WebhookInsecureSkipVerifyValue) != 0 {
+		trimmed := strings.TrimSpace(string(request.WebhookInsecureSkipVerifyValue))
+		if trimmed == "null" ||
+			json.Unmarshal(request.WebhookInsecureSkipVerifyValue, &request.WebhookInsecureSkipVerify) != nil {
+			return submitRequest{}, nil, errors.New("webhookInsecureSkipVerify must be a boolean")
+		}
+	}
 	return request, nil, nil
 }
 
@@ -437,7 +448,7 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 				return submitRequest{}, archive, err
 			}
 		case "inputPath", "outputPath", "mode", "createDestination", "language", "optimize",
-			"webhookUrl", "webhookSecret", "rootPath":
+			"webhookUrl", "webhookSecret", "rootPath", "webhookInsecureSkipVerify":
 			if part.FileName() != "" {
 				return submitRequest{}, archive, errors.New("multipart text field must not be a file")
 			}
@@ -484,6 +495,15 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 		}
 		request.Optimize = &parsed
 	}
+	if seen["webhookInsecureSkipVerify"] {
+		switch strings.ToLower(fields["webhookInsecureSkipVerify"]) {
+		case "true":
+			request.WebhookInsecureSkipVerify = true
+		case "false":
+		default:
+			return submitRequest{}, archive, errors.New("webhookInsecureSkipVerify must be true or false")
+		}
+	}
 	if archive != nil && (inputPath != "" || outputPath != "") {
 		return submitRequest{}, archive, errors.New("archive uploads cannot include inputPath or outputPath")
 	}
@@ -494,14 +514,15 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 		InputPath: inputPath, OutputPath: outputPath, Mode: mode,
 		CreateDestinationValue: create, Language: request.Language, Optimize: request.Optimize,
 		WebhookURL: fields["webhookUrl"], WebhookSecret: fields["webhookSecret"], RootPath: fields["rootPath"],
+		WebhookInsecureSkipVerify: request.WebhookInsecureSkipVerify,
 	}
 	return request, archive, nil
 }
 
-func validateWebhookOptions(webhookURL, webhookSecret, rootPath string) error {
+func validateWebhookOptions(webhookURL, webhookSecret, rootPath string, insecureSkipVerify bool) error {
 	if webhookURL == "" {
-		if webhookSecret != "" || rootPath != "" {
-			return errors.New("webhookSecret and rootPath require webhookUrl")
+		if webhookSecret != "" || rootPath != "" || insecureSkipVerify {
+			return errors.New("webhookSecret, rootPath, and webhookInsecureSkipVerify require webhookUrl")
 		}
 		return nil
 	}

@@ -270,7 +270,11 @@ job resource as JSON when the job reaches a terminal state. This works with
 JSON and multipart submissions and does not replace polling or result
 downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
 only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
-included in the JSON body. Both values require `webhookUrl`.
+included in the JSON body. Both values require `webhookUrl`. HTTPS certificate
+verification is enabled by default. For a trusted webhook using a self-signed
+certificate, set `webhookInsecureSkipVerify` to `true`; this disables
+certificate verification for that webhook request only and also requires
+`webhookUrl`. Use this option only when you trust the webhook endpoint.
 
 ```sh
 curl --fail-with-body --silent --show-error \
