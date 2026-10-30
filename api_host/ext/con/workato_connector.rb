@@ -157,6 +157,15 @@
               type: 'string',
               optional: true,
               hint: 'Sent in the X-Root-Path header so the automation can locate the OCR result files. Requires a completion webhook URL.'
+            },
+            {
+              name: 'webhookInsecureSkipVerify',
+              label: 'Skip webhook certificate verification',
+              type: 'boolean',
+              control_type: 'checkbox',
+              default: false,
+              optional: true,
+              hint: "Disables TLS certificate verification for this job's HTTPS webhook only. Use only for a trusted webhook with a self-signed certificate. Requires a completion webhook URL."
             }
           ]
         end,
@@ -185,7 +194,8 @@
             optimize: optimize,
             webhookUrl: input['webhookUrl'],
             webhookSecret: input['webhookSecret'],
-            rootPath: input['rootPath']
+            rootPath: input['rootPath'],
+            webhookInsecureSkipVerify: input['webhookInsecureSkipVerify']
           }
           payload.delete_if { |_key, value| value.nil? }
 
@@ -287,6 +297,15 @@
               type: 'string',
               optional: true,
               hint: 'Sent in the X-Root-Path header so the automation can locate the OCR result files. Requires a completion webhook URL.'
+            },
+            {
+              name: 'webhookInsecureSkipVerify',
+              label: 'Skip webhook certificate verification',
+              type: 'boolean',
+              control_type: 'checkbox',
+              default: false,
+              optional: true,
+              hint: "Disables TLS certificate verification for this job's HTTPS webhook only. Use only for a trusted webhook with a self-signed certificate. Requires a completion webhook URL."
             }
           ]
         end,
@@ -332,7 +351,8 @@
             optimize: optimize,
             webhookUrl: input['webhookUrl'],
             webhookSecret: input['webhookSecret'],
-            rootPath: input['rootPath']
+            rootPath: input['rootPath'],
+            webhookInsecureSkipVerify: input['webhookInsecureSkipVerify']
           }
           payload.delete_if { |_key, value| value.nil? }
 
