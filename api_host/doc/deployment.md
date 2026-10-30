@@ -4,11 +4,11 @@
 
 The recommended deployment uses the pre-compiled API-host image published to
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Use a published release tag; this example uses `v1.2.6-rc`. Pull the image now,
+Use a published release tag; this example uses `v1.2.7-rc`. Pull the image now,
 then start it after configuring the runtime environment below:
 
 ```sh
-TAG=v1.2.6-rc
+TAG=v1.2.7-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ```
@@ -63,7 +63,7 @@ protected `.env` file:
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon; ignored in Kubernetes |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
-| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.6-rc`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
+| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.7-rc`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
 | `OCR_CPU_REQUEST` / `OCR_CPU_LIMIT` | No | — | Kubernetes OCR Job CPU request and limit; set both with the memory values below to enable per-worker resource settings |
 | `OCR_MEMORY_REQUEST` / `OCR_MEMORY_LIMIT` | No | — | Kubernetes OCR Job memory request and limit, using Kubernetes quantity syntax such as `2Gi` and `4Gi` |
@@ -246,7 +246,7 @@ commit it.
 Start the pre-compiled image with the launcher:
 
 ```sh
-TAG=v1.2.6-rc
+TAG=v1.2.7-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```
