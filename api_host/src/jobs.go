@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -733,7 +734,11 @@ func (s *JobService) notifyWebhook(job Job) {
 		}
 		response, err := client.Do(request)
 		if err != nil {
-			s.logger.Warn("OCR job webhook request failed", "job_id", job.ID)
+			var requestErr *url.Error
+			if errors.As(err, &requestErr) {
+				err = requestErr.Err
+			}
+			s.logger.Warn("OCR job webhook request failed", "job_id", job.ID, "error", err)
 			return
 		}
 		defer response.Body.Close()
