@@ -4,11 +4,11 @@
 
 The recommended deployment uses the pre-compiled API-host image published to
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Use a published release tag; this example uses `v1.2.2`. Pull the image now,
+Use a published release tag; this example uses `v1.2.9`. Pull the image now,
 then start it after configuring the runtime environment below:
 
 ```sh
-TAG=v1.2.2
+TAG=v1.2.9
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ```
@@ -35,6 +35,12 @@ certificate at `/usr/local/share/ca-certificates/root_cert.crt` as a
 BuildKit secret. The CA is mounted only while Go downloads modules; it is not
 copied into the resulting image. Neither script reads the runtime `.env`.
 
+The API-host image includes `/bin/sh` and `curl` for troubleshooting outbound
+connections from the same container network. For example, open a shell in a
+running Docker container with `sudo docker exec -it api-host /bin/sh`, or in a
+Kubernetes pod with `kubectl exec -it deployment/api-host -- /bin/sh`. The
+image still runs the API host as a non-root user.
+
 The same runtime setup works for either image because the CA secret only
 changes how dependencies are downloaded during the build. The launcher
 selects the sole locally available direct/proxied image automatically, or
@@ -57,7 +63,7 @@ protected `.env` file:
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Same directory as seen by the Docker daemon; ignored in Kubernetes |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | Persistent SQLite job database |
-| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
+| `OCR_IMAGE` | Yes | — | OCR image reference, such as `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9`; use an explicit release tag or digest, never `latest` (prefer a digest for immutable pinning) |
 | `OCR_JOBS` | No | `3` | OCRmyPDF worker threads passed to the OCR container |
 | `OCR_CPU_REQUEST` / `OCR_CPU_LIMIT` | No | — | Kubernetes OCR Job CPU request and limit; set both with the memory values below to enable per-worker resource settings |
 | `OCR_MEMORY_REQUEST` / `OCR_MEMORY_LIMIT` | No | — | Kubernetes OCR Job memory request and limit, using Kubernetes quantity syntax such as `2Gi` and `4Gi` |
@@ -240,7 +246,7 @@ commit it.
 Start the pre-compiled image with the launcher:
 
 ```sh
-TAG=v1.2.2
+TAG=v1.2.9
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```
@@ -290,6 +296,13 @@ integer from `0` through `3`. The API rejects invalid values and does not
 accept arbitrary OCRmyPDF or Docker arguments. For example, use
 `"language":"deu+eng","optimize":2` in JSON, or the corresponding multipart
 fields for an archive upload.
+
+Submissions can also set `webhookUrl` to receive the final job status via
+POST. Optional `webhookSecret` and `rootPath` values are sent in the
+`X-Webhook-Secret` and `X-Root-Path` callback headers, and require a webhook
+URL. Delivery is best-effort with one attempt; see the
+[webhook quickstart](quickstart-and-worker-setup.md#completion-webhooks) for
+the payload and example.
 
 For synchronous execution, set `"mode":"synchronous"`. On success the host
 returns `200` with the processed `.tar.gz` archive in the response body and

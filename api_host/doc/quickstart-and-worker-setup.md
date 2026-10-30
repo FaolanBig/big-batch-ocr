@@ -55,7 +55,7 @@ docker compose version
 Choose an absolute directory on the Docker daemon's host for
 `DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
 OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
-For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.2`; replace this with a
+For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9`; replace this with a
 published tag, or use a digest-pinned reference for stronger immutability.
 The OCR image does not need to be pre-pulled: the API host pulls the configured
 image automatically when the first job needs it, if it is not already local.
@@ -146,11 +146,11 @@ the Docker host.
 
 Use the pre-compiled API-host image from
 [GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Select a published release tag (the example below uses `v1.2.2`), then pull and
+Select a published release tag (the example below uses `v1.2.9`), then pull and
 start it:
 
 ```sh
-TAG=v1.2.2
+TAG=v1.2.9
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
@@ -263,6 +263,35 @@ from untrusted input. A `failed` job is a valid job resource; check its `error`
 and `exitCode` fields. Do not resubmit just because a client times out or
 disconnects after acceptance.
 
+#### Completion webhooks
+
+Any submission can include `webhookUrl` to have the API host POST the final
+job resource as JSON when the job reaches a terminal state. This works with
+JSON and multipart submissions and does not replace polling or result
+downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
+only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
+included in the JSON body. Both values require `webhookUrl`. HTTPS certificate
+verification is enabled by default. For a trusted webhook using a self-signed
+certificate, set `webhookInsecureSkipVerify` to `true`; this disables
+certificate verification for that webhook request only and also requires
+`webhookUrl`. Use this option only when you trust the webhook endpoint.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","webhookUrl":"https://automation.example.com/ocr/finished","webhookSecret":"replace-with-a-shared-secret","rootPath":"/srv/automation/ocr-results"}' \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+The callback includes the terminal `status` (`succeeded`, `failed`, or
+`cancelled`) and the same public job fields returned by the status endpoint.
+Webhook delivery is best-effort: the host makes one request attempt with a
+10-second timeout, does not follow redirects, and logs failures without
+changing the job outcome. Use HTTPS and verify the shared-secret header in
+the automation endpoint. `rootPath` is an opaque destination value for the
+automation; it is not interpreted as a path by the API host.
+
 For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
 up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
 the processed `.tar.gz` archive (with the job ID in the `X-Job-ID` header) or a
@@ -299,6 +328,14 @@ The archive request body is limited to 1 GiB and its extracted contents to
 10 GiB. Archive entries must be files or directories; links and paths that
 escape the archive are rejected. The existing JSON request with `inputPath`
 continues to use the shared-directory workflow and has no uploaded archive.
+
+For Workato's **Compress files** action, map its **Compressed file contents**
+output to the connector's **Compressed file contents** field. Configure the
+action to use **Gzip** compression and **Tar** archive format; the API requires
+a `.tar.gz` archive. The connector Base64-encodes these contents and submits
+them as `inputArchiveContentsBase64`; the API decodes them before extraction.
+The regular **Input tar.gz archive** field remains available for file datapills
+and manual file selection.
 
 After a job succeeds, download its processed files by job ID. The endpoint
 returns a `.tar.gz` archive; polling and downloading both require the same

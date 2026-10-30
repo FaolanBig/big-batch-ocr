@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,17 +38,25 @@ type Job struct {
 	Error       *JobError  `json:"error"`
 	StatusURL   string     `json:"statusUrl"`
 
-	InputHost     string `json:"-"`
-	OutputHost    string `json:"-"`
-	ContainerID   string `json:"-"`
-	ContainerLogs string `json:"-"`
-	OCRLanguage   string `json:"-"`
-	OCROptimize   int    `json:"-"`
+	InputHost                 string `json:"-"`
+	OutputHost                string `json:"-"`
+	ContainerID               string `json:"-"`
+	ContainerLogs             string `json:"-"`
+	OCRLanguage               string `json:"-"`
+	OCROptimize               int    `json:"-"`
+	WebhookURL                string `json:"-"`
+	WebhookSecret             string `json:"-"`
+	RootPath                  string `json:"-"`
+	WebhookInsecureSkipVerify bool   `json:"-"`
 }
 
 type OCROptions struct {
-	Language string
-	Optimize int
+	Language                  string
+	Optimize                  int
+	WebhookURL                string
+	WebhookSecret             string
+	RootPath                  string
+	WebhookInsecureSkipVerify bool
 }
 
 type Executor interface {
@@ -84,15 +97,19 @@ func OpenJobStore(path string) (*JobStore, error) {
 			container_id TEXT,
 			container_logs TEXT,
 			ocr_language TEXT NOT NULL DEFAULT 'eng',
-			ocr_optimize INTEGER NOT NULL DEFAULT 3
+			ocr_optimize INTEGER NOT NULL DEFAULT 3,
+			webhook_url TEXT NOT NULL DEFAULT '',
+			webhook_secret TEXT NOT NULL DEFAULT '',
+			root_path TEXT NOT NULL DEFAULT '',
+			webhook_insecure_skip_verify INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, queue_order);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize job database: %w", err)
 	}
-	if err := ensureOCRJobColumns(db); err != nil {
+	if err := ensureJobColumns(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate OCR job settings: %w", err)
+		return nil, fmt.Errorf("migrate job settings: %w", err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
@@ -101,7 +118,7 @@ func OpenJobStore(path string) (*JobStore, error) {
 	return &JobStore{db: db}, nil
 }
 
-func ensureOCRJobColumns(db *sql.DB) error {
+func ensureJobColumns(db *sql.DB) error {
 	rows, err := db.Query(`PRAGMA table_info(jobs)`)
 	if err != nil {
 		return fmt.Errorf("inspect jobs table: %w", err)
@@ -134,6 +151,21 @@ func ensureOCRJobColumns(db *sql.DB) error {
 			return fmt.Errorf("add OCR optimization column: %w", err)
 		}
 	}
+	for _, column := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "webhook_url", sql: `ALTER TABLE jobs ADD COLUMN webhook_url TEXT NOT NULL DEFAULT ''`},
+		{name: "webhook_secret", sql: `ALTER TABLE jobs ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''`},
+		{name: "root_path", sql: `ALTER TABLE jobs ADD COLUMN root_path TEXT NOT NULL DEFAULT ''`},
+		{name: "webhook_insecure_skip_verify", sql: `ALTER TABLE jobs ADD COLUMN webhook_insecure_skip_verify INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if !columns[column.name] {
+			if _, err := db.Exec(column.sql); err != nil {
+				return fmt.Errorf("add %s column: %w", column.name, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -150,9 +182,11 @@ func (s *JobStore) Create(input, output, inputHost, outputHost string, options .
 func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string, options ...OCROptions) (Job, error) {
 	ocrOptions := defaultOCROptions(options)
 	created := time.Now().UTC()
-	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,ocr_language,ocr_optimize)
-		VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
-		id, input, output, inputHost, outputHost, formatDBTime(created), ocrOptions.Language, ocrOptions.Optimize)
+	_, err := s.db.Exec(`INSERT INTO jobs(id,status,input_path,output_path,input_host,output_host,created_at,
+		ocr_language,ocr_optimize,webhook_url,webhook_secret,root_path,webhook_insecure_skip_verify)
+		VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, input, output, inputHost, outputHost, formatDBTime(created), ocrOptions.Language, ocrOptions.Optimize,
+		ocrOptions.WebhookURL, ocrOptions.WebhookSecret, ocrOptions.RootPath, ocrOptions.WebhookInsecureSkipVerify)
 	if err != nil {
 		return Job{}, fmt.Errorf("persist queued job: %w", err)
 	}
@@ -160,6 +194,8 @@ func (s *JobStore) CreateWithID(id, input, output, inputHost, outputHost string,
 		ID: id, Status: "queued", InputPath: input, OutputPath: output,
 		CreatedAt: created, StatusURL: statusURL(id), InputHost: inputHost, OutputHost: outputHost,
 		OCRLanguage: ocrOptions.Language, OCROptimize: ocrOptions.Optimize,
+		WebhookURL: ocrOptions.WebhookURL, WebhookSecret: ocrOptions.WebhookSecret, RootPath: ocrOptions.RootPath,
+		WebhookInsecureSkipVerify: ocrOptions.WebhookInsecureSkipVerify,
 	}, nil
 }
 
@@ -177,11 +213,13 @@ func (s *JobStore) Get(id string) (Job, error) {
 	var exitCode sql.NullInt64
 	var errorCode, errorMessage, containerID, containerLogs sql.NullString
 	err := s.db.QueryRow(`SELECT id,status,input_path,output_path,input_host,output_host,created_at,
-		started_at,completed_at,exit_code,error_code,error_message,container_id,container_logs,ocr_language,ocr_optimize
+		started_at,completed_at,exit_code,error_code,error_message,container_id,container_logs,ocr_language,ocr_optimize,
+		webhook_url,webhook_secret,root_path,webhook_insecure_skip_verify
 		FROM jobs WHERE id=?`, id).
 		Scan(&job.ID, &job.Status, &job.InputPath, &job.OutputPath, &job.InputHost, &job.OutputHost,
 			&created, &started, &completed, &exitCode, &errorCode, &errorMessage, &containerID, &containerLogs,
-			&job.OCRLanguage, &job.OCROptimize)
+			&job.OCRLanguage, &job.OCROptimize, &job.WebhookURL, &job.WebhookSecret, &job.RootPath,
+			&job.WebhookInsecureSkipVerify)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, sql.ErrNoRows
 	}
@@ -281,26 +319,27 @@ func (s *JobStore) SetRunning(id, containerID string) error {
 	return requireOneRow(result, err, "mark job running")
 }
 
-func (s *JobStore) RequestCancel(id string) (Job, error) {
+func (s *JobStore) RequestCancel(id string) (Job, bool, error) {
 	now := formatDBTime(time.Now().UTC())
 	result, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
 		error_code='JOB_CANCELLED',error_message='The job was cancelled by request.'
 		WHERE id=? AND status='queued'`, now, id)
 	if err != nil {
-		return Job{}, fmt.Errorf("cancel queued job: %w", err)
+		return Job{}, false, fmt.Errorf("cancel queued job: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return Job{}, err
+		return Job{}, false, err
 	}
 	if changed == 0 {
 		_, err = s.db.Exec(`UPDATE jobs SET status='cancelling'
 			WHERE id=? AND status IN ('starting','running')`, id)
 		if err != nil {
-			return Job{}, fmt.Errorf("request running job cancellation: %w", err)
+			return Job{}, false, fmt.Errorf("request running job cancellation: %w", err)
 		}
 	}
-	return s.Get(id)
+	job, err := s.Get(id)
+	return job, changed == 1, err
 }
 
 func (s *JobStore) Resume(id string) (Job, error) {
@@ -398,17 +437,49 @@ func (s *JobStore) Finish(id string, exitCode int, runErr error) error {
 	return tx.Commit()
 }
 
-func (s *JobStore) RecoverInterrupted() error {
+func (s *JobStore) RecoverInterrupted() ([]Job, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs WHERE status IN ('cancelling','starting','running')`)
+	if err != nil {
+		return nil, fmt.Errorf("list interrupted OCR jobs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read interrupted OCR job ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read interrupted OCR jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close interrupted OCR job list: %w", err)
+	}
+
 	now := formatDBTime(time.Now().UTC())
 	if _, err := s.db.Exec(`UPDATE jobs SET status='cancelled',completed_at=?,exit_code=NULL,
 		error_code='JOB_CANCELLED',error_message='The job was cancelled before the API host restarted.',container_id=NULL
 		WHERE status='cancelling'`, now); err != nil {
-		return err
+		return nil, err
 	}
-	_, err := s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,error_code='OCR_EXECUTION_FAILED',
+	_, err = s.db.Exec(`UPDATE jobs SET status='failed',completed_at=?,error_code='OCR_EXECUTION_FAILED',
 		error_message='The API host restarted before completion could be confirmed.',container_id=NULL
 		WHERE status IN ('starting','running')`, now)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	recovered := make([]Job, 0, len(ids))
+	for _, id := range ids {
+		job, err := s.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		recovered = append(recovered, job)
+	}
+	return recovered, nil
 }
 
 func (s *JobStore) InterruptedContainerIDs() ([]string, error) {
@@ -508,9 +579,12 @@ func (s *JobService) LockMaintenance() func() {
 }
 
 func (s *JobService) Cancel(id string) (Job, error) {
-	job, err := s.store.RequestCancel(id)
+	job, queuedCancellation, err := s.store.RequestCancel(id)
 	if err != nil {
 		return Job{}, err
+	}
+	if queuedCancellation {
+		s.notifyWebhook(job)
 	}
 	switch job.Status {
 	case "cancelling":
@@ -606,6 +680,7 @@ func (s *JobService) execute(job Job) {
 		s.logger.Error("unable to read final OCR job outcome", "job_id", job.ID, "error", err)
 		return
 	}
+	s.notifyWebhook(finished)
 	if finished.Status == "cancelled" {
 		s.logger.Info("OCR job cancelled", "job_id", job.ID)
 		return
@@ -619,6 +694,59 @@ func (s *JobService) execute(job Job) {
 		return
 	}
 	s.logger.Info("OCR job completed", "job_id", job.ID, "status", "succeeded")
+}
+
+func (s *JobService) notifyWebhook(job Job) {
+	if job.WebhookURL == "" {
+		return
+	}
+	go func() {
+		body, err := json.Marshal(struct {
+			Job
+			RootPath string `json:"rootPath,omitempty"`
+		}{Job: job, RootPath: job.RootPath})
+		if err != nil {
+			s.logger.Error("could not encode OCR job webhook", "job_id", job.ID, "error", err)
+			return
+		}
+		request, err := http.NewRequest(http.MethodPost, job.WebhookURL, bytes.NewReader(body))
+		if err != nil {
+			s.logger.Warn("could not create OCR job webhook request", "job_id", job.ID)
+			return
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if job.WebhookSecret != "" {
+			request.Header.Set("X-Webhook-Secret", job.WebhookSecret)
+		}
+		if job.RootPath != "" {
+			request.Header.Set("X-Root-Path", job.RootPath)
+		}
+		client := http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		if job.WebhookInsecureSkipVerify {
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			client.Transport = transport
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			var requestErr *url.Error
+			if errors.As(err, &requestErr) {
+				err = requestErr.Err
+			}
+			s.logger.Warn("OCR job webhook request failed", "job_id", job.ID, "error", err)
+			return
+		}
+		defer response.Body.Close()
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			s.logger.Warn("OCR job webhook returned a non-success status",
+				"job_id", job.ID, "status", response.StatusCode)
+		}
+	}()
 }
 
 func requireOneRow(result sql.Result, err error, operation string) error {

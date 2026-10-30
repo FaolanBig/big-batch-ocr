@@ -6,9 +6,11 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
@@ -367,6 +369,111 @@ func TestMultipartArchiveAcceptsOCROverrides(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("OCR job was not executed")
+	}
+}
+
+func TestMultipartArchiveContentsFieldAcceptsRawTarGzip(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	api.config.AllowDirectoryAccess = false
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", "asynchronous"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("inputArchiveContents", string(testArchive(t, "invoice.pdf", "source"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("archive contents submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	uploadedFile := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID, "input", "invoice.pdf")
+	if content, err := os.ReadFile(uploadedFile); err != nil || string(content) != "source" {
+		t.Fatalf("uploaded archive contents were not extracted: content=%q err=%v", content, err)
+	}
+}
+
+func TestMultipartArchiveContentsBase64FieldAcceptsEncodedTarGzip(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+	api.config.AllowDirectoryAccess = false
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", "asynchronous"); err != nil {
+		t.Fatal(err)
+	}
+	archive := testArchive(t, "invoice.pdf", "source")
+	if err := writer.WriteField("inputArchiveContentsBase64", base64.StdEncoding.EncodeToString(archive)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("base64 archive submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	uploadedFile := filepath.Join(api.config.DataRoot, ".api-host", "jobs", accepted.JobID, "input", "invoice.pdf")
+	if content, err := os.ReadFile(uploadedFile); err != nil || string(content) != "source" {
+		t.Fatalf("base64 archive contents were not decoded and extracted: content=%q err=%v", content, err)
+	}
+}
+
+func TestMultipartArchiveContentsBase64FieldRejectsInvalidBase64(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", "asynchronous"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("inputArchiveContentsBase64", "not base64!"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid base64 archive submission status = %d, body: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -928,6 +1035,222 @@ func TestSynchronousTimeoutDoesNotCancelJob(t *testing.T) {
 	t.Fatal("timed-out synchronous job did not continue to completion")
 }
 
+func TestJobCompletionCallsWebhookWithOptionalHeaders(t *testing.T) {
+	type callback struct {
+		secret   string
+		rootPath string
+		body     map[string]any
+	}
+	callbacks := make(chan callback, 1)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		callbacks <- callback{
+			secret:   r.Header.Get("X-Webhook-Secret"),
+			rootPath: r.Header.Get("X-Root-Path"),
+			body:     body,
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`","webhookSecret":"automation-secret","rootPath":"/srv/ocr/results"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case received := <-callbacks:
+		if received.secret != "automation-secret" || received.rootPath != "/srv/ocr/results" {
+			t.Fatalf("webhook headers = secret %q, root path %q", received.secret, received.rootPath)
+		}
+		if received.body["jobId"] != accepted.JobID || received.body["status"] != "succeeded" {
+			t.Fatalf("webhook payload = %#v", received.body)
+		}
+		if received.body["rootPath"] != "/srv/ocr/results" {
+			t.Fatalf("webhook payload omitted rootPath: %#v", received.body)
+		}
+		if _, includesSecret := received.body["webhookSecret"]; includesSecret {
+			t.Fatal("webhook payload exposed the configured secret")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("job completion webhook was not called")
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.WebhookURL != webhook.URL || job.WebhookSecret != "automation-secret" ||
+		job.RootPath != "/srv/ocr/results" || job.WebhookInsecureSkipVerify {
+		t.Fatalf("webhook options were not persisted: %#v", job)
+	}
+}
+
+func TestWebhookInsecureSkipVerifyIsOptIn(t *testing.T) {
+	callbacks := make(chan struct{}, 1)
+	webhook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callbacks <- struct{}{}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	webhook.Config.ErrorLog = log.New(io.Discard, "", 0)
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, _ Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`"}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("default-verification submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var defaultAccepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &defaultAccepted); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.Get(defaultAccepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.WebhookInsecureSkipVerify {
+		t.Fatal("webhook certificate verification was disabled by default")
+	}
+	select {
+	case <-callbacks:
+		t.Fatal("webhook with an untrusted certificate was called when verification was enabled")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	response = submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"`+webhook.URL+`","webhookInsecureSkipVerify":true}`)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("skip-verification submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var insecureAccepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &insecureAccepted); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Get(insecureAccepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !job.WebhookInsecureSkipVerify {
+		t.Fatal("webhook certificate verification option was not persisted")
+	}
+	select {
+	case <-callbacks:
+	case <-time.After(2 * time.Second):
+		t.Fatal("webhook with a self-signed certificate was not called when verification was disabled")
+	}
+}
+
+func TestWebhookOptionsAreValidatedAndRequireAURL(t *testing.T) {
+	called := false
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		called = true
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	for _, body := range []string{
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"file:///tmp/callback"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookSecret":"secret-without-url"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"http://example.test","rootPath":"bad\r\npath"}`,
+		`{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookInsecureSkipVerify":true}`,
+	} {
+		response := submitTestJob(api, body)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_WEBHOOK_OPTIONS") {
+			t.Fatalf("invalid webhook options response = %d, body: %s", response.Code, response.Body.String())
+		}
+	}
+	response := submitTestJob(api, `{"inputPath":"input","outputPath":"output","mode":"asynchronous","webhookUrl":"http://example.test","webhookInsecureSkipVerify":null}`)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVALID_REQUEST") {
+		t.Fatalf("null webhookInsecureSkipVerify response = %d, body: %s", response.Code, response.Body.String())
+	}
+	if called {
+		t.Fatal("invalid webhook options started an OCR job")
+	}
+}
+
+func TestMultipartArchiveSubmissionPreservesWebhookOptions(t *testing.T) {
+	type callback struct {
+		headers http.Header
+		body    map[string]any
+	}
+	callbacks := make(chan callback, 1)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode webhook body: %v", err)
+		}
+		callbacks <- callback{headers: r.Header.Clone(), body: body}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer webhook.Close()
+
+	api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+		if err := markRunning("container-id"); err != nil {
+			return 1, err
+		}
+		if job.WebhookURL != webhook.URL || job.WebhookSecret != "archive-secret" ||
+			job.RootPath != "/automation/output" || !job.WebhookInsecureSkipVerify {
+			return 1, errors.New("multipart webhook options were not passed to the job")
+		}
+		return 0, nil
+	}}, time.Second)
+	defer cleanup()
+
+	body, contentType := multipartArchiveRequestWithFields(t, testArchive(t, "invoice.pdf", "source"), true, "asynchronous", map[string]string{
+		"webhookUrl": webhook.URL, "webhookSecret": "archive-secret", "rootPath": "/automation/output",
+		"webhookInsecureSkipVerify": "true",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("multipart submission status = %d, body: %s", response.Code, response.Body.String())
+	}
+	var accepted acknowledgement
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case received := <-callbacks:
+		if received.headers.Get("X-Webhook-Secret") != "archive-secret" || received.headers.Get("X-Root-Path") != "/automation/output" {
+			t.Fatalf("callback headers = %#v", received.headers)
+		}
+		if received.body["rootPath"] != "/automation/output" {
+			t.Fatalf("callback body omitted rootPath: %#v", received.body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("multipart job completion webhook was not called")
+	}
+	job, err := store.Get(accepted.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "succeeded" {
+		t.Fatalf("multipart job status = %q", job.Status)
+	}
+}
+
 func TestInvalidPathsNeverSubmitAndUnknownFieldsAreRejected(t *testing.T) {
 	called := false
 	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
@@ -1135,8 +1458,12 @@ func TestJobPersistsAcrossStoreReopenAndRecoveryFailsActiveState(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != "docker-id" {
 		t.Fatalf("interrupted container ids = %v, err = %v", ids, err)
 	}
-	if err := store.RecoverInterrupted(); err != nil {
+	recoveredJobs, err := store.RecoverInterrupted()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(recoveredJobs) != 1 || recoveredJobs[0].ID != job.ID {
+		t.Fatalf("recovered jobs = %#v, want job %q", recoveredJobs, job.ID)
 	}
 	recovered, err := store.Get(job.ID)
 	if err != nil {
