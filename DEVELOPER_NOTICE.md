@@ -1,5 +1,9 @@
-# DEVELOPER_NOTICE
+# Developer notice
 
-ℹ️ active development (currently) at branch [sub_dev_api_host_main_branch](https://github.com/FaolanBig/big-batch-ocr/tree/sub_dev_api_host_main_branch)
+The repository contains the OCR batcher and the API host. The project board
+tracks API-host planning and roadmap work:
+[big-batch-ocr API-host project](https://github.com/users/FaolanBig/projects/7).
 
-> ℹ️ project planning and roadmap found at [big-batch-ocr_api-host](https://github.com/users/FaolanBig/projects/7)
+For the supported workflows and current behavior, start with the
+[repository README](README.md), [batcher guide](ocr_batcher/README.md), or
+[API-host documentation](api_host/doc/README.md).

@@ -1,50 +1,36 @@
 # Big Batch OCR
 
-Big Batch OCR processes document folders in batches. It recursively finds PDF
-files, applies OCR with [OCRmyPDF](https://ocrmypdf.readthedocs.io/), and copies
-non-PDF files to a separate destination while preserving the directory
-structure. Run the batcher directly on Linux, in Docker, or submit jobs through
-the API host.
+Big Batch OCR recursively processes document folders. It OCRs PDF files with
+[OCRmyPDF](https://ocrmypdf.readthedocs.io/) and copies non-PDF files while
+preserving their relative directory structure. Run the batcher directly on
+Linux, in Docker, or submit jobs to the API host.
 
-## What it does
+## Features
 
-- **Batch folder processing:** scans nested directories and recognizes PDFs by
-  their case-insensitive `.pdf` filename extension.
-- **OCR and file copying:** processes PDFs with page rotation and deskewing,
-  image cleanup, optimization, and skipping of pages that already contain
-  text. Non-PDF files are copied without changing their contents.
-- **Safe output publishing:** writes files to temporary paths before moving
-  completed results into place, helping avoid partial output files.
-- **Resume support:** records a SHA-256 signature for each completed PDF and
-  skips it on later runs only when the output and source signature still match.
-  Identical non-PDF files are also skipped.
-- **Progress and diagnostics:** native runs display progress and OCR output in
-  tmux panes; Docker runs write logs alongside the output by default.
-- **API job handling:** the single API host authenticates requests by bearer
-  key, validates paths under a configured data root, persists jobs in SQLite,
-  and runs OCR through a configurable queue. It automatically detects whether
-  it is running in Kubernetes or in Docker: Kubernetes deployments
-  run OCR as Kubernetes Jobs, while Docker deployments use Docker Engine.
-
-Files are processed sequentially; `OCR_JOBS` controls OCRmyPDF's internal
-worker threads for each PDF, not the number of files processed at once. The API
-host can run multiple OCR containers at once with `MAX_CONCURRENT_JOBS`.
+- PDFs are recognized by a case-insensitive `.pdf` filename suffix and
+  processed sequentially. OCRmyPDF may use multiple worker threads per PDF.
+- The batcher rotates, deskews, cleans, optimizes, and skips pages that already
+  contain text. Language and optimization level are configurable.
+- Files are published from temporary paths. PDF completion markers include
+  the source checksum and OCR language/optimization settings, enabling safe
+  resumable runs. Identical non-PDF files are skipped.
+- The API host accepts direct `.tar.gz` uploads by default, persists jobs in
+  SQLite, and runs them through a bounded queue on Docker Engine or Kubernetes.
+  Directory-based requests are optional and disabled by default.
 
 ## Choose how to run it
 
 | Option | Best for | Requirements |
 | --- | --- | --- |
-| [Terminal script](#1-run-the-batcher-in-a-terminal) | Local or server-side folder batches | Linux, Bash, OCRmyPDF and dependencies, tmux |
-| [Docker image](#2-run-the-batcher-in-docker) | Reproducible runs without installing OCR tools on the host | Docker |
-| [API host](#3-run-the-api-host) | Automation platforms and queued, trackable jobs | Docker Engine, or a Kubernetes cluster with shared persistent storage |
+| [Terminal script](#run-the-batcher-in-a-terminal) | Local or server-side folder batches | Linux, Bash, OCRmyPDF and dependencies, tmux |
+| [Docker image](#run-the-batcher-in-docker) | Reproducible runs without installing OCR tools on the host | Docker |
+| [API host](#run-the-api-host) | Automation and queued, trackable jobs | Docker Engine, or Kubernetes with shared persistent storage |
 
-## Quick start
+## Run the batcher in a terminal
 
-### 1. Run the batcher in a terminal
-
-The native script is [`ocr_batcher/src/ocr_sequencial.sh`](./ocr_batcher/src/ocr_sequencial.sh).
-It requires Bash, OCRmyPDF and its dependencies, `tmux`, and common Linux
-utilities. Start it from an existing tmux session:
+The current native entry point is
+[`ocr_batcher/src/ocr_sequencial.sh`](./ocr_batcher/src/ocr_sequencial.sh).
+Start it from an existing tmux session:
 
 ```bash
 git clone https://github.com/FaolanBig/big-batch-ocr.git
@@ -52,55 +38,40 @@ cd big-batch-ocr
 tmux new -s ocr
 ```
 
-In the tmux session, run:
+In that tmux session, run:
 
 ```bash
 bash ocr_batcher/src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
 ```
 
-You can set the number of OCRmyPDF worker threads with `OCR_JOBS` (default:
-75% of the available logical CPUs):
+Set OCR worker threads and OCR options as needed:
 
 ```bash
-OCR_JOBS=4 bash ocr_batcher/src/ocr_sequencial.sh "/path/to/input" "/path/to/output"
+OCR_JOBS=4 bash ocr_batcher/src/ocr_sequencial.sh \
+  --language deu+eng --optimize 2 \
+  "/path/to/input" "/path/to/output"
 ```
 
-To select installed OCRmyPDF/Tesseract languages and the optimization level,
-use `--language CODE[+CODE...]` and `--optimize 0..3` (or set
-`OCR_LANGUAGE`/`OCR_OPTIMIZE`; defaults are `eng` and `3`):
+`OCR_JOBS` defaults to 75% of the available logical CPUs. `OCR_LANGUAGE` and
+`OCR_OPTIMIZE` default to `eng` and `3`; command-line options override these
+environment values. The source must exist, and the target must not be the same
+as or inside the source. The target is created if needed. The script displays
+progress and OCR output in tmux panes. See the [batcher guide](./ocr_batcher/README.md)
+and [batcher documentation index](./ocr_batcher/doc/HOME.md) for requirements,
+binary builds, logs, failures, and resume behavior.
 
-```bash
-bash ocr_batcher/src/ocr_sequencial.sh --language deu+eng --optimize 2 "/path/to/input" "/path/to/output"
-```
+The native script can offer to install missing dependencies on supported
+Linux distributions. Git and tmux must be installed before it can run; install
+dependencies with
+[`ocr_batcher/dependencies/install_dependencies.sh`](./ocr_batcher/dependencies/install_dependencies.sh)
+if required. See the [dependency notes](./ocr_batcher/dependencies/README.md).
 
-The source directory must exist. The output directory is created if needed.
-They must be different directories, and the output must not be inside the
-input. Progress and live OCR output appear in tmux panes. See the
-[batcher guide](./ocr_batcher/README.md) for details, including binary builds,
-logs, error handling, and resume behavior.
+## Run the batcher in Docker
 
-For this **bare-metal Bash script only**, missing dependencies are detected at
-startup and the script asks before running the distro-specific installer. The
-installer supports Debian/Ubuntu, openSUSE, Fedora, RHEL, and Arch Linux;
-administrator privileges may be required (Arch requires running as a regular
-user with `sudo` configured). If you decline, install the dependencies
-manually before retrying. This does not apply to the Docker image or API host,
-which use their own dependencies. See
-[`ocr_batcher/dependencies/README.md`](./ocr_batcher/dependencies/README.md)
-for package, license, and copyright details.
-
-Before the bare-metal script can operate, install **Git** and **tmux**. The
-script must run inside a tmux session, so if tmux is missing, run
-`ocr_batcher/dependencies/install_dependencies.sh` manually first, then start
-tmux and launch the script from that session. Git is needed by the Arch
-dependency-install path to fetch OCRmyPDF from the AUR.
-
-### 2. Run the batcher in Docker
-
-The published image starts OCR automatically. The tag used here will pull the base release. 
-Replace the example tag with a version available in the
-[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial) if you want a specific release;
-published tags correspond to Git tags, and there is no `latest` tag.
+The published container starts OCR automatically. Replace the example tag
+with a release available in the
+[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial);
+there is no `latest` tag.
 
 ```bash
 TAG=v1.2.9
@@ -113,68 +84,32 @@ docker run --rm -it \
   "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:$TAG"
 ```
 
-The paths shown are examples; choose a published version and replace the host
-directories. The input is mounted read-only, while OCR output, resume state,
-and logs are stored under the output directory. If you prefer to build locally,
-use the batcher's
-[`Dockerfile`](./ocr_batcher/docker/Dockerfile) from `ocr_batcher/docker`:
+Input is mounted read-only at `/source`; output, state, and logs are stored
+under `/destination`. For local builds and additional options, see
+[Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
 
-```bash
-cd ocr_batcher/docker
-sudo bash build_dockerfile.sh
-```
+## Run the API host
 
-Then run the local `ocr_batch_sequencial:v1.2.9` image with the same volume
-mounts. More options are in [Run OCR in Docker](./ocr_batcher/doc/run_with_docker.md).
-
-### 3. Run the API host
-
-There is one API host for both Docker and Kubernetes; no platform setting is
-needed. The Docker instructions below are the quickstart. To deploy on
-Kubernetes, use the provided
-[`api_host/k8s/api-host.yaml`](./api_host/k8s/api-host.yaml) manifest and the
+The same API-host image supports Docker and Kubernetes. It detects Kubernetes
+from its in-cluster service account; otherwise it runs OCR through Docker
+Engine. For Kubernetes deployment, use
+[`api_host/k8s/api-host.yaml`](./api_host/k8s/api-host.yaml) and the
 [Kubernetes deployment guide](./api_host/doc/deployment.md#kubernetes-deployment).
-Create the `api-host-secrets` Secret with your `API_KEY`, set the API-host image
-to a build/release that includes Kubernetes support, and apply the manifest.
-The API host detects its Kubernetes service-account credentials and creates
-OCR Jobs using the same PersistentVolumeClaim mounted at `DATA_ROOT`; the
-cluster must provide storage that can be mounted by both the API pod and OCR
-Job pods. The manifest also configures persistent job state, scoped RBAC, and
-an OCR-job NetworkPolicy.
+The cluster must provide shared storage mounted at `DATA_ROOT` for the API pod
+and OCR Job pods.
 
-For security, prefer uploading `.tar.gz` archives through the API and leave
-shared-directory submissions disabled unless they are required for trusted
-callers. The API host accepts either a shared-directory input or an uploaded
-archive, runs the configured OCR image through its automatically selected
-Docker or Kubernetes backend, records jobs in a
-persistent SQLite database, and exposes synchronous and asynchronous modes.
-Uploaded jobs receive isolated input/output folders, and the result can be
-downloaded by job ID; their workspace is removed after a successful download.
-The following is a quick outline; follow the complete
-[API host deployment guide](./api_host/doc/deployment.md) before exposing or
-operating the service.
-
-For Docker, configure the API on a Linux Docker host:
+For a Docker deployment on a Linux host, create the runtime configuration:
 
 ```bash
 ./api_host/config/configure_api_host.sh
 ```
 
-The configurator asks for a versioned OCR image, creates or accepts an API key,
-creates the data root with permissions for UID/GID 65532, and writes a private
-`api_host/env/.env` file. If you plan to use shared-directory submissions,
-create input/output child folders and place source PDFs there:
-
-```bash
-sudo install -d -m 0750 -o 65532 -g 65532 \
-  /srv/big-batch-ocr-data/incoming/scans \
-  /srv/big-batch-ocr-data/processed
-```
-
-Replace the example root if you selected a different one. Archive uploads do
-not need these child folders; the API creates isolated per-job input/output
-directories automatically. The configured OCR image is pulled on first use if
-it is not already available locally. Pull and start the pre-compiled API host:
+The configurator prompts for a versioned OCR image and API key, creates the
+selected data root with permissions for UID/GID `65532`, and writes a private
+`api_host/env/.env` file. Directory submissions default to disabled. The API
+image can be pulled from the
+[API-host package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host)
+and started with:
 
 ```bash
 TAG=v1.2.9
@@ -183,90 +118,85 @@ sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```
 
-This uses the pre-compiled API-host image published to GHCR. To compile the API
-host yourself instead, build the standard image with
-`bash api_host/build/build_dockerfile.sh` (or use
-`bash api_host/build/build_dockerfile_proxied_cert.sh` when building behind a
-TLS-inspection proxy), then start it with `./api_host/run/run_container.sh`.
+The configured OCR image is pulled by Docker on first use if it is not already
+available. For self-built images, API settings, Compose, Kubernetes, TLS, and
+security requirements, follow the [API-host deployment guide](./api_host/doc/deployment.md)
+and [quickstart](./api_host/doc/quickstart-and-worker-setup.md).
 
-The Docker API listens on `127.0.0.1:8080` by default. Check liveness and
-submit an asynchronous job (replace the paths and key):
+### Submit an archive directly to the API
+
+Create a `.tar.gz` archive of the input directory and upload it in the request.
+The API creates an isolated workspace; no input/output directories need to be
+pre-staged under the server's data root. The command example uses `curl` and
+`jq`.
 
 ```bash
 read -r -s -p "API key: " API_KEY
 printf '\n'
 
-curl --fail http://127.0.0.1:8080/health
-
-curl --fail-with-body -i \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"inputPath":"incoming/scans","outputPath":"processed/scans","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
-  http://127.0.0.1:8080/api/v1/jobs
+tar -czf /tmp/scans.tar.gz -C "/path/to/scans" .
+response="$(
+  curl --fail-with-body --silent --show-error \
+    --oauth2-bearer "$API_KEY" \
+    -F "inputArchive=@/tmp/scans.tar.gz;type=application/gzip" \
+    -F "mode=asynchronous" \
+    -F "language=deu+eng" \
+    -F "optimize=2" \
+    http://127.0.0.1:8080/api/v1/jobs
+)"
+printf '%s\n' "$response" | jq .
+JOB_ID="$(printf '%s\n' "$response" | jq -r .jobId)"
+STATUS_URL="http://127.0.0.1:8080$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
-The accepted response includes a `jobId` and `statusUrl`. Copy that URL into
-`STATUS_URL` and poll it using the same bearer authorization header until the
-job reaches `succeeded` or `failed`:
+Poll until the job succeeds or fails, then download the result archive:
 
 ```bash
-STATUS_URL='http://127.0.0.1:8080/api/v1/jobs/<job-id-from-response>'
-curl --fail-with-body \
-  -H "Authorization: Bearer $API_KEY" \
-  "$STATUS_URL"
+while :; do
+  status="$(curl --fail-with-body --silent --show-error \
+    --oauth2-bearer "$API_KEY" "$STATUS_URL")"
+  printf '%s\n' "$status" | jq .
+  state="$(printf '%s\n' "$status" | jq -r .status)"
+  case "$state" in
+    succeeded|failed) break ;;
+    *) sleep 2 ;;
+  esac
+done
+
+curl --fail-with-body --silent --show-error \
+  --oauth2-bearer "$API_KEY" \
+  "http://127.0.0.1:8080/api/v1/jobs/$JOB_ID/result" \
+  -o "result-$JOB_ID.tar.gz"
 ```
 
-  For uploaded archive submissions, send `inputArchive` and `mode` as multipart
-  form data and omit `inputPath` and `outputPath`. After the job succeeds,
-  asynchronous jobs can be downloaded from `/api/v1/jobs/<jobId>/result`.
-  Synchronous submissions return the processed `.tar.gz` archive directly; the
-  `X-Job-ID` response header identifies the completed job. See the
-  [API host quickstart](./api_host/doc/quickstart-and-worker-setup.md) for
-  complete upload, polling, and download examples.
+The upload body is limited to 1 GiB and extracted archive contents to 10 GiB.
+Downloads do not delete job data; remove a terminal uploaded job with
+`DELETE /api/v1/jobs/{jobId}`, or clean up all terminal uploaded jobs with
+`POST /api/v1/jobs/cleanup` and `{"scope":"uploads"}`. Synchronous mode returns
+the result archive directly; if its wait limit expires, the job continues and
+the response includes a status URL. Poll it rather than submitting again.
+See the [API specification](./api_host/api/api_specification/main_api_specification_api_host.json)
+for all fields and endpoints.
 
-  To wait for completion in the submit request instead, use
-`"mode":"synchronous"`; if the configured wait limit is reached, the job
-continues and the problem response provides a status URL to poll before
-downloading its result.
-
-The API rejects paths outside the configured data root, path traversal and
-symlink escapes, unreadable inputs, and identical or nested input/output
-directories. Missing output directories are created only when
-`"createDestination":true` is provided. Restrict network access and protect
-the API key: access to the Docker socket grants broad control over the Docker
-host. In Kubernetes, restrict the API Service's network exposure and retain
-the namespace-scoped RBAC in the example manifest. See the [API contract](./api_host/api/api_specification/main_api_specification_api_host.json)
-and [deployment guide](./api_host/doc/deployment.md) for configuration,
-security, and operational limits.
-
-## Behavior and limitations
-
-- Directory structure is preserved in the output. PDFs are processed one at
-  a time; files are identified by extension, not by inspecting PDF contents.
-- A failed file does not stop the rest of the batch. The process exits
-  nonzero if any file fails.
-- Deleting `.ocr_sequencial_state` removes PDF completion markers and causes
-  those PDFs to be processed again.
-- The API host's queue and concurrency limit are local to one API-host
-  instance. Do not run multiple API hosts against the same job database.
-- The API host controls Docker or can create Kubernetes OCR Jobs, so deploy it
-  only on a trusted host/cluster and network. Use a protected secret for
-  `API_KEY` and terminate TLS at a trusted reverse proxy for remote access.
+Shared-directory submissions are still supported when
+`ALLOW_DIRECTORY_ACCESS=true`; keep them disabled unless trusted callers
+specifically need them. The API validates such paths beneath `DATA_ROOT`.
+The API host has access to Docker or can create Kubernetes Jobs, so restrict
+network exposure and protect the API key. Do not run multiple API hosts
+against one database; the queue and concurrency limit belong to one process.
 
 ## Documentation
 
-- [Batcher guide](./ocr_batcher/README.md)
-- [Batcher documentation index](./ocr_batcher/doc/HOME.md)
+- [OCR batcher guide](./ocr_batcher/README.md)
+- [OCR batcher documentation index](./ocr_batcher/doc/HOME.md)
 - [Docker usage](./ocr_batcher/doc/run_with_docker.md)
-- [API host quickstart and worker setup](./api_host/doc/quickstart-and-worker-setup.md)
-- [API host deployment](./api_host/doc/deployment.md)
-- [API specification](./api_host/api/api_specification/main_api_specification_api_host.json)
+- [API-host quickstart](./api_host/doc/quickstart-and-worker-setup.md)
+- [API-host deployment and configuration](./api_host/doc/deployment.md)
+- [OpenAPI contract](./api_host/api/api_specification/main_api_specification_api_host.json)
 
 ## License
 
 This project is licensed under the [GNU Affero General Public License,
 version 3](./LICENSE).
-
-## Copyright
 
 Copyright © Carl Öttinger 2026
