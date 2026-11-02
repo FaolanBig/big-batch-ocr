@@ -1,153 +1,78 @@
-# Docker quickstart and worker setup
+# API host quickstart and worker setup
 
-This guide takes you from a clean checkout to a running Docker deployment that
-starts OCR containers for accepted jobs. For Kubernetes, use the
-[`deployment.md`](deployment.md#kubernetes-deployment) guide; the same API host
-automatically selects Kubernetes Jobs when it runs in a Kubernetes pod.
+This guide starts the API host on one Linux Docker machine and submits a
+`.tar.gz` input archive directly to the API. For Kubernetes, use the
+[deployment guide](deployment.md#kubernetes-deployment).
 
-## How the worker is included
+## Worker model
 
-There is no separate worker binary or worker container to build or start. The
-API host starts `MAX_CONCURRENT_JOBS` in-process worker goroutines when it
-starts. Each worker takes the oldest queued job, starts one OCR container using
-the configured `OCR_IMAGE`, waits for it, records its result, and removes the
-container. For example, `MAX_CONCURRENT_JOBS=2` means this API-host process can
-run at most two OCR containers at once; further accepted jobs wait in the
-persistent queue.
+The API host starts `MAX_CONCURRENT_JOBS` in-process workers. Each worker
+claims the oldest queued job, starts one OCR container (or Kubernetes Job)
+using `OCR_IMAGE`, waits for it, records its outcome, and removes the managed
+runtime resource. `MAX_CONCURRENT_JOBS` limits jobs at once;
+`OCR_JOBS` controls OCRmyPDF's internal threads in each job.
 
-`OCR_JOBS` is a separate setting: it controls OCRmyPDF's internal worker
-threads **inside each OCR container**. Increasing both settings increases
-resource use: as a first estimate, plan for up to
-`MAX_CONCURRENT_JOBS * OCR_JOBS` OCR threads, plus memory and CPU used by
-scanning and processing individual documents. Start with one concurrent job
-and three OCR threads, monitor the host, and adjust deliberately.
-The API host's `OCR_LANGUAGE` and `OCR_OPTIMIZE` settings provide defaults
-(`eng` and `3`); each job may override them with validated `language` and
-`optimize` fields.
+As a starting estimate, plan for up to
+`MAX_CONCURRENT_JOBS * OCR_JOBS` OCR threads, in addition to memory and CPU
+used by the rest of the OCR pipeline. Start with one concurrent job and a
+small thread count, then monitor resource use.
 
-Run one API-host instance against its database. Do not scale this Compose
-service to multiple replicas or run multiple API hosts against one database:
-the queue workers and concurrency limit are local to a process, and startup
-recovery treats jobs left running in the database as interrupted. A
-multi-host worker service needs coordinated locking/leases and shared storage,
-which this implementation does not provide.
+Run one API-host instance against its database. Queue workers and concurrency
+are local to one process; this implementation does not coordinate multiple
+API hosts. On startup, queued jobs remain queued, while jobs left in `starting`
+or `running` are marked failed because their completion cannot be confirmed.
 
-## Quickstart: one Linux Docker host
+## Docker quickstart
 
-### 1. Install prerequisites
+### 1. Check prerequisites
 
-Use a Linux machine with Docker Engine, the Docker Compose plugin, `curl`,
-`openssl`, `jq`, and `sudo` access. The operator must be allowed to access the
-Docker daemon.
-Docker socket access is effectively root-equivalent on that host; only deploy
-this API on a trusted machine and keep the API private. The Compose example
-publishes the API on `127.0.0.1:8080`, not on every network interface.
-
-From the repository root, confirm Docker access:
+Use a Linux machine with Docker Engine, `curl`, `jq`, and `sudo` access.
+`openssl` is needed only if you ask the configurator to generate the API key;
+the Docker Compose plugin is needed only if you choose to start the service
+through Compose. The operator must be allowed to access the Docker daemon.
+Docker socket access is effectively root-equivalent on the host, so run this
+API only on a trusted machine and keep it private. The included Compose
+configuration binds to `127.0.0.1:8080`.
 
 ```sh
 docker version
-docker compose version
 ```
 
-### 2. Choose a data root and a published OCR image
+### 2. Configure the API host
 
-Choose an absolute directory on the Docker daemon's host for
-`DOCKER_DATA_ROOT` (the default is `/srv/big-batch-ocr-data`) and a versioned
-OCR image from the [Big Batch OCR package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_ocr-sequencial).
-For example, `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9`; replace this with a
-published tag, or use a digest-pinned reference for stronger immutability.
-The OCR image does not need to be pre-pulled: the API host pulls the configured
-image automatically when the first job needs it, if it is not already local.
-
-`DOCKER_DATA_ROOT` is the absolute path on the Docker daemon's host. The
-container mounts this same host directory at `/data`, and the API maps
-validated relative paths back to that host path for the OCR container.
-Do not point it at a path that is available only inside the API container.
-
-When you use the configurator in step 3, it creates the selected data-root
-directory and sets it to mode `0750`, owned by UID/GID `65532` for the API and
-OCR containers. You do not need to create the root manually. To use the
-shared-directory submission method, enable directory-based submissions in the
-configurator, then create the input/output subdirectories inside that root and
-put source files in the input directory. Directory submissions are disabled
-by default. For security, keep them disabled and submit input as `.tar.gz`
-archives through the API; each archive gets an isolated per-job workspace.
-Enable shared-directory submissions only for trusted callers when they are
-specifically needed.
-
-### 3. Configure runtime credentials
-
-Create the runtime environment file with the interactive configurator:
+Run the interactive configurator from the repository root:
 
 ```sh
 ./api_host/config/configure_api_host.sh
 ```
 
-The script prompts for the OCR image, API key (press Enter to generate one),
-Docker data root, worker settings, and whether directory-based submissions
-should be allowed. That option defaults to disabled, so use archive uploads
-unless you explicitly opt in to directory submissions. The script creates the
-data-root directory with permissions for the containers, then saves
-`api_host/env/.env` with mode `600`. Enter the image and data-root values
-selected in step 2.
-For the shared-directory example later in this guide, create its child
-directories after configuration (replace the root if you selected a different
-one):
+It asks for a versioned OCR image, API key, Docker-visible data root, worker
+settings, and access options. Press Enter at the API-key prompt to generate a
+random key. Directory-based job submissions default to disabled; leave them
+disabled to require archive uploads. The configurator creates the selected
+data-root directory with mode `0750` and ownership UID/GID `65532`, and writes
+`api_host/env/.env` with mode `0600`.
 
-```sh
-sudo install -d -m 0750 -o 65532 -g 65532 \
-  /srv/big-batch-ocr-data/incoming/sample \
-  /srv/big-batch-ocr-data/processed
-```
+The OCR image does not have to be pre-pulled. Docker pulls it when the first
+job starts if it is not already local. Choose an absolute host path for the
+Docker data root; it is mounted at `/data` in the API and OCR containers.
+Archive uploads create their own workspace under this root, so no input or
+output subdirectories need to be created manually.
 
-The API host and managed OCR containers run as UID/GID `65532`. If you later
-use `POST /api/v1/jobs/cleanup` with `{"scope":"all"}`, that user must have
-write and execute permission on each shared job directory's parent to remove
-the directory, and on directories inside it to remove their contents. For
-example, owning `incoming/sample` does not let the API delete it if
-`incoming` is owned by root and is not writable by UID/GID `65532`. See
-[`deployment.md`](deployment.md#docker-socket-and-filesystem-mapping) for a
-targeted permission-repair example. Avoid recursively changing permissions on
-the whole data root.
+Keep the API key private. Do not commit `api_host/env/.env`, place secrets in
+build arguments, or enable anonymous access on a reachable network.
 
-Skip this for archive uploads; they do not require pre-created input or output
-directories.
-Keep `API_KEY` protected; do not commit it or put it into a Docker build
-argument. Authentication is required unless `ALLOW_ANONYMOUS=true` is
-explicitly set. Do not enable anonymous mode on an exposed network. If you use
-Compose instead of the run script, set `DOCKER_GID` to the numeric output of
-`stat -c '%g' /var/run/docker.sock`; the run launcher calculates it for you.
+For manual configuration, copy `api_host/env/.env_template` to
+`api_host/env/.env`, set restrictive file permissions, and edit the values.
+Keep `DATA_ROOT=/data`; set `DOCKER_DATA_ROOT` to the same host directory
+mounted into the API container. Manual setup also requires creating the host
+directory for UID/GID `65532`. When using Compose directly, set `DOCKER_GID`
+to the numeric group ID of `/var/run/docker.sock`; the launcher derives it
+automatically.
 
-Alternatively, create the same file by manually editing the template:
+### 3. Start the API host
 
-```sh
-cp api_host/env/.env_template api_host/env/.env
-chmod 600 api_host/env/.env
-```
-
-Edit `api_host/env/.env`, replacing the sample `API_KEY`, `OCR_IMAGE`, and
-`DOCKER_DATA_ROOT` values. Keep `DATA_ROOT=/data`; use plain `KEY=VALUE`
-entries without `export` or shell command substitutions. The API key can be
-generated with `openssl rand -hex 32`.
-The manual template workflow does not create the host data root; create it
-with permissions for UID/GID 65532 before starting the service:
-
-```sh
-sudo install -d -m 0750 -o 65532 -g 65532 /srv/big-batch-ocr-data
-```
-
-If Docker socket permissions prevent the API container from connecting,
-resolve access through your host's Docker administration policy. Do not make
-the socket world-writable. Granting socket access grants broad control over
-the Docker host.
-
-### 4. Start the API host
-
-Use the pre-compiled API-host image from
-[GitHub Container Registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
-Select a published release tag (the example below uses `v1.2.9`), then pull and
-start it:
+Use a published API-host image:
 
 ```sh
 TAG=v1.2.9
@@ -156,84 +81,45 @@ sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
 ```
 
-To compile the API host yourself instead, run either build script from the
-repository root:
+Use a tag present in the
+[API-host package registry](https://github.com/FaolanBig/big-batch-ocr/pkgs/container/big-batch-ocr_api-host).
+There is no `latest` tag. To build locally, use
+`bash api_host/build/build_dockerfile.sh` or, behind a TLS-inspection proxy,
+`bash api_host/build/build_dockerfile_proxied_cert.sh`; then run
+`./api_host/run/run_container.sh` without an image argument. If both local
+images exist, pass the desired image tag explicitly.
+
+The launcher uses `api_host/env/.env`, binds the Docker socket and data root,
+and persists SQLite state in the `api-host-state` named volume. It leaves an
+already-running API container unchanged. Check startup and liveness:
 
 ```sh
-# Standard build; does not pass a CA certificate secret.
-bash api_host/build/build_dockerfile.sh
-
-# OR: proxy build; uses the company CA as a temporary BuildKit secret.
-bash api_host/build/build_dockerfile_proxied_cert.sh
-```
-
-The proxy script reads the certificate at
-`/usr/local/share/ca-certificates/root_cert.crt` as a BuildKit secret.
-The CA is used only during module download and is not copied into the image.
-Neither build script reads the runtime `.env` file. Start the image using the
-launcher, which works identically for either build:
-
-```sh
-./api_host/run/run_container.sh
-```
-
-If both images are available, pass the desired image:
-
-```sh
-./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
-```
-
-Check startup and health:
-
-```sh
-sudo docker ps --filter name=api-host
 sudo docker logs --tail=100 api-host
-```
-
-The launcher reads `api_host/env/.env`, binds `DOCKER_DATA_ROOT` at `/data`,
-and creates/reuses the persistent `api-host-state` volume. It leaves an
-already-running API host unchanged; if the named container is stopped, it
-recreates it with the current environment file.
-
-The image contains the API host only. It connects to the Docker Engine through
-the mounted socket and creates OCR containers when jobs are accepted. The
-SQLite database is persisted in the `api-host-state` named volume, so queued
-jobs and completed job records survive a normal API-container replacement.
-On restart, queued work can resume; work that was already starting/running is
-marked failed if completion cannot be confirmed.
-
-Confirm process liveness:
-
-```sh
 curl --fail http://127.0.0.1:8080/health
 ```
 
-Expected response:
+`/health` is unauthenticated and reports process liveness only; it does not
+check Docker Engine or OCR-image availability.
 
-```json
-{"status":"ok"}
-```
+### 4. Upload an archive and submit a job
 
-Health is unauthenticated and reports process liveness only; it does not
-confirm that the Docker daemon or OCR image is available.
-
-### 5. Submit a job and poll its status
-
-Paths are relative to `DATA_ROOT` (`/data` in Compose), not arbitrary host
-paths. Existing input and output directories are required by default. Set
-`createDestination` to `true` only when the API should create a missing output
-directory beneath the data root. Alternatively, upload a `.tar.gz` archive
-and let the API create per-job input/output folders without specifying either
-path.
-
-Submit asynchronously:
+Create a compressed tar archive from the directory to process. Submit it as
+the `inputArchive` multipart field; do not send `inputPath` or `outputPath`.
+The following example submits asynchronously and reads the returned job ID
+and status URL:
 
 ```sh
+read -r -s -p "API key: " API_KEY
+printf '\n'
+
+tar -czf /tmp/invoices.tar.gz -C ./invoices .
 response="$(
   curl --fail-with-body --silent --show-error \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","createDestination":true,"language":"deu+eng","optimize":2}' \
+    --oauth2-bearer "$API_KEY" \
+    -F "inputArchive=@/tmp/invoices.tar.gz;type=application/gzip" \
+    -F "mode=asynchronous" \
+    -F "language=deu+eng" \
+    -F "optimize=2" \
     http://127.0.0.1:8080/api/v1/jobs
 )"
 printf '%s\n' "$response" | jq .
@@ -241,13 +127,12 @@ job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
 status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
-The API returns `202 Accepted` with a job ID and status URL. Poll that URL
-until the status is `succeeded` or `failed`:
+Poll the status URL until `status` is `succeeded` or `failed`:
 
 ```sh
 while :; do
   status="$(curl --fail-with-body --silent --show-error \
-    -H "Authorization: Bearer $API_KEY" \
+    --oauth2-bearer "$API_KEY" \
     "http://127.0.0.1:8080${status_url}")"
   printf '%s\n' "$status" | jq .
   state="$(printf '%s\n' "$status" | jq -r .status)"
@@ -258,166 +143,141 @@ while :; do
 done
 ```
 
-Use the status URL returned by the API rather than constructing a host path
-from untrusted input. A `failed` job is a valid job resource; check its `error`
-and `exitCode` fields. Do not resubmit just because a client times out or
-disconnects after acceptance.
-
-#### Completion webhooks
-
-Any submission can include `webhookUrl` to have the API host POST the final
-job resource as JSON when the job reaches a terminal state. This works with
-JSON and multipart submissions and does not replace polling or result
-downloads. Optionally include `webhookSecret` and `rootPath`; these are sent
-only as callback headers (`X-Webhook-Secret` and `X-Root-Path`) and are not
-included in the JSON body. Both values require `webhookUrl`. HTTPS certificate
-verification is enabled by default. For a trusted webhook using a self-signed
-certificate, set `webhookInsecureSkipVerify` to `true`; this disables
-certificate verification for that webhook request only and also requires
-`webhookUrl`. Use this option only when you trust the webhook endpoint.
+After success, download the result archive:
 
 ```sh
 curl --fail-with-body --silent --show-error \
-  -H "Authorization: ******" \
-  -H "Content-Type: application/json" \
-  -d '{"inputPath":"incoming/sample","outputPath":"processed/sample","mode":"asynchronous","webhookUrl":"https://automation.example.com/ocr/finished","webhookSecret":"replace-with-a-shared-secret","rootPath":"/srv/automation/ocr-results"}' \
-  http://127.0.0.1:8080/api/v1/jobs
-```
-
-The callback includes the terminal `status` (`succeeded`, `failed`, or
-`cancelled`) and the same public job fields returned by the status endpoint.
-Webhook delivery is best-effort: the host makes one request attempt with a
-10-second timeout, does not follow redirects, and logs failures without
-changing the job outcome. Use HTTPS and verify the shared-secret header in
-the automation endpoint. `rootPath` is an opaque destination value for the
-automation; it is not interpreted as a path by the API host.
-
-For a synchronous test instead, submit `"mode":"synchronous"`. The call waits
-up to `SYNC_WAIT_LIMIT_SECONDS` (30 seconds by default), then either returns
-the processed `.tar.gz` archive (with the job ID in the `X-Job-ID` header) or a
-`504` containing the accepted job ID and status URL. The job is not cancelled
-at the wait limit; poll its status URL and download its result after it
-succeeds.
-
-Instead of placing input files on the shared data volume manually, upload a
-`.tar.gz` archive as multipart form data. Set `mode`; do not set `inputPath` or
-`outputPath`. The API creates a
-private workspace under `.api-host/jobs/<jobId>/` with separate `input` and
-`output` directories:
-
-```sh
-tar -czf /tmp/invoices.tar.gz -C ./invoices .
-response="$(
-  curl --fail-with-body --silent --show-error \
-    -H "Authorization: ******" \
-    -F "inputArchive=@/tmp/invoices.tar.gz" \
-    -F "mode=asynchronous" \
-    http://127.0.0.1:8080/api/v1/jobs
-)"
-printf '%s\n' "$response" | jq .
-job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
-status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
-```
-
-The `language` and `optimize` fields are optional. `language` accepts one or
-more installed OCRmyPDF/Tesseract language codes joined by `+`; `optimize` is
-an integer from `0` to `3`. Omitted fields use the server defaults. Unknown
-OCR command arguments cannot be supplied.
-
-The archive request body is limited to 1 GiB and its extracted contents to
-10 GiB. Archive entries must be files or directories; links and paths that
-escape the archive are rejected. The existing JSON request with `inputPath`
-continues to use the shared-directory workflow and has no uploaded archive.
-
-For Workato's **Compress files** action, map its **Compressed file contents**
-output to the connector's **Compressed file contents** field. Configure the
-action to use **Gzip** compression and **Tar** archive format; the API requires
-a `.tar.gz` archive. The connector Base64-encodes these contents and submits
-them as `inputArchiveContentsBase64`; the API decodes them before extraction.
-The regular **Input tar.gz archive** field remains available for file datapills
-and manual file selection.
-
-After a job succeeds, download its processed files by job ID. The endpoint
-returns a `.tar.gz` archive; polling and downloading both require the same
-bearer credential:
-
-```sh
-curl --fail-with-body --silent --show-error \
-  -H "Authorization: ******" \
+  --oauth2-bearer "$API_KEY" \
   "http://127.0.0.1:8080/api/v1/jobs/${job_id}/result" \
   -o "result-${job_id}.tar.gz"
 ```
 
-The result is generated from the job's output directory when requested.
-Downloading does not remove the job-specific workspace or its extracted
-input; the result can be downloaded again later. Remove uploaded-job data
-explicitly with `DELETE /api/v1/jobs/${job_id}` after the job is terminal, or
-use `POST /api/v1/jobs/cleanup` with `{"scope":"uploads"}` to delete all
-terminal uploaded jobs. Cancelling a job also preserves its workspace until
-explicit cleanup. For jobs submitted with the original `inputPath` JSON
-request, result downloads do not remove the shared output directory, and
-deleting the job record does not remove shared input/output directories.
+The API request body is limited to 1 GiB and extracted archive contents to
+10 GiB. The archive may contain regular files and directories only; symbolic
+links and paths that escape the archive root are rejected. Language values
+must use installed OCRmyPDF/Tesseract codes separated by `+`; optimization
+must be an integer from `0` to `3`. Omitted options use the server defaults.
 
-### 6. Monitor and stop the service
+### Synchronous submissions
 
-Inspect API logs and running containers:
+Use `mode=synchronous` to wait for completion and download the result archive
+in the submit response. Save the response body as a file:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  -D /tmp/ocr-response-headers.txt \
+  --oauth2-bearer "$API_KEY" \
+  -F "inputArchive=@/tmp/invoices.tar.gz;type=application/gzip" \
+  -F "mode=synchronous" \
+  http://127.0.0.1:8080/api/v1/jobs \
+  -o synchronous-result.tar.gz
+grep -i '^X-Job-ID:' /tmp/ocr-response-headers.txt
+```
+
+The response includes the completed job ID in `X-Job-ID`. If the configured
+`SYNC_WAIT_LIMIT_SECONDS` is reached first, the API returns `504` with the job
+ID and status URL; it does not cancel the job. Poll that URL and download the
+result after the job succeeds. Do not repeat the submission after a timeout.
+
+### Completion webhooks
+
+Any multipart submission may include `webhookUrl`. The API makes one POST with
+the terminal job resource as JSON. Optional `webhookSecret` and `rootPath`
+values become `X-Webhook-Secret` and `X-Root-Path` headers; `rootPath` is also
+included in the webhook JSON body. They require a webhook URL.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --oauth2-bearer "$API_KEY" \
+  -F "inputArchive=@/tmp/invoices.tar.gz;type=application/gzip" \
+  -F "mode=asynchronous" \
+  -F "webhookUrl=https://automation.example.com/ocr/finished" \
+  -F "webhookSecret=replace-with-a-shared-secret" \
+  -F "rootPath=/srv/automation/ocr-results" \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+HTTPS certificate verification is enabled by default. Set
+`webhookInsecureSkipVerify=true` only for a trusted endpoint using a
+self-signed certificate. Delivery is best-effort: there is one attempt, a
+10-second timeout, no redirect following, and callback failures do not change
+the job outcome. Webhooks supplement rather than replace status polling and
+result download.
+
+For integrations that provide archive bytes rather than a file object, the
+multipart fields `inputArchiveContents` (raw bytes) and
+`inputArchiveContentsBase64` (standard Base64) are also supported.
+
+## Retain or remove job data
+
+Downloading a result does not delete the job record or uploaded workspace;
+results can be downloaded again. After the job reaches a terminal state,
+delete a single job and its uploaded workspace:
+
+```sh
+curl --fail-with-body --silent --show-error -X DELETE \
+  --oauth2-bearer "$API_KEY" \
+  "http://127.0.0.1:8080/api/v1/jobs/${job_id}"
+```
+
+Alternatively, remove metadata and workspaces for every terminal uploaded
+job:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --oauth2-bearer "$API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"uploads"}' \
+  http://127.0.0.1:8080/api/v1/jobs/cleanup
+```
+
+Queued, starting, running, and cancelling jobs are not removed. Cancellation
+does not delete data. Cleanup scope `all` is destructive: it also deletes
+caller-specified shared input and output directories for eligible terminal
+directory jobs. See [Docker data paths](deployment.md#docker-compose-and-data-paths)
+for permissions and safeguards.
+
+### Optional shared-directory submissions
+
+For trusted callers only, an operator can set `ALLOW_DIRECTORY_ACCESS=true`.
+Then a request can refer to existing input and output directories relative to
+`DATA_ROOT`. Missing output directories still require
+`createDestination=true`. This mode is disabled by default and is not needed
+for direct archive uploads.
+
+## Monitor and size workers
+
+The API logs structured JSON to standard output:
 
 ```sh
 sudo docker logs --follow api-host
 sudo docker ps --filter label=com.faolanbig.big-batch-ocr.managed=true
 ```
 
-The API removes completed OCR containers after recording their exit result and
-capturing up to 32 KiB of container output in the job database. The OCR image
-also writes its own processing logs/state below each destination directory.
-Plan retention and backups for both the host data directory and the Compose
-`api-host-state` volume.
+Completed OCR containers are removed after the host records their outcome and
+captures up to 32 KiB of runtime output in the job database. OCR processing
+logs are stored under the output directory inside the job workspace. Keep
+appropriate retention and backups for the data root and `api-host-state`
+volume.
 
-Stop with:
-
-```sh
-sudo docker stop api-host
-sudo docker rm api-host
-```
-
-Stopping/removing the container preserves the `api-host-state` named volume.
-Do not run `docker volume rm api-host-state` unless you intend to delete
-persisted job history and queued work.
-
-## Adjusting worker capacity
-
-Change `MAX_CONCURRENT_JOBS` and/or `OCR_JOBS` in `.env`, then recreate the
-single API-host container with the same image tag and mounts:
-
-```sh
-sudo docker rm -f api-host
-sudo docker run -d --name api-host --restart unless-stopped \
-  --env-file .env \
-  -p 127.0.0.1:8080:8080 \
-  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /srv/big-batch-ocr-data:/data:rw \
-  -v api-host-state:/var/lib/api-host \
-  big-batch-ocr-api-host:direct
-```
-
-This configures two in-process queue workers, with each OCR container using
-two OCRmyPDF threads. Watch CPU, memory, I/O, and the number of running
-containers before increasing capacity further. Jobs are persisted in FIFO
-order and no more than the configured number of workers will start jobs in
-this API-host instance.
+Change `MAX_CONCURRENT_JOBS` and `OCR_JOBS` in the environment file, then
+recreate the single API-host container to apply the settings. Increasing both
+values increases resource use; monitor CPU, memory, and I/O before increasing
+capacity. For Kubernetes, also set appropriate OCR Job resource requests and
+limits. The four `OCR_CPU_REQUEST`, `OCR_CPU_LIMIT`, `OCR_MEMORY_REQUEST`,
+and `OCR_MEMORY_LIMIT` settings must be specified together.
 
 ## Troubleshooting
 
 | Symptom | Checks |
 | --- | --- |
-| API container exits during startup | Check `sudo docker logs api-host`; verify `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH` configuration. |
-| `permission denied` accessing Docker | Check `/var/run/docker.sock` permissions and `DOCKER_GID`; do not loosen socket permissions to world-writable. |
-| Job rejected with `INVALID_PATH` | Use paths relative to `/data`; check existence, directory type, access permissions, and symlink targets. |
-| Destination does not exist | Create it on the host or request `"createDestination":true`. |
-| Job is still `queued` | Check that the API host is running and inspect its logs and Docker daemon availability. Workers pick up queued jobs when a slot becomes available. |
-| Job is `failed` | Check the safe `error` and `exitCode` in the job resource, API logs, Docker daemon health, OCR image reference, and OCR logs under the destination. |
-| Docker cannot bind a validated path | Confirm `DOCKER_DATA_ROOT` is the daemon-host absolute path and matches the host directory mounted at `/data`. |
+| API container exits at startup | Check logs and required settings, especially `API_KEY`, `OCR_IMAGE`, `DATA_ROOT`, and `DATABASE_PATH`. |
+| `permission denied` on Docker socket | Check socket access and `DOCKER_GID`; never make the socket world-writable. |
+| Archive upload rejected | Verify it is a valid `.tar.gz`, under the request and extraction limits, and contains only regular files/directories with safe paths. |
+| Job remains `queued` | Check API-host logs, Docker daemon health, and whether worker slots are occupied. |
+| Job is `failed` | Inspect the job's `error` and `exitCode`, API logs, and OCR output logs in its workspace. |
+| Docker cannot access a job path | Confirm `DOCKER_DATA_ROOT` is the Docker daemon's host path corresponding to `/data`. |
 
-For the full configuration reference, API examples, and Docker-socket security
-notes, see [`deployment.md`](deployment.md).
+For all environment variables, Docker socket risks, Kubernetes setup, and the
+full API contract, see [deployment](deployment.md) and the
+[OpenAPI specification](../api/api_specification/main_api_specification_api_host.json).

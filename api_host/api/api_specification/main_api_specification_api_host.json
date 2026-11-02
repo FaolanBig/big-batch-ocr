@@ -39,43 +39,27 @@
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/SubmitJobRequest"
+                "$ref": "#/components/schemas/SubmitMultipartJobRequest"
               },
               "examples": {
-                "synchronous": {
-                  "summary": "Wait for OCR completion",
+                "uploadArchiveAsynchronous": {
+                  "summary": "Upload a tar.gz archive and poll for completion",
                   "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "processed/invoices",
-                    "mode": "synchronous"
-                  }
-                },
-                "asynchronous": {
-                  "summary": "Submit and poll for completion",
-                  "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "processed/invoices",
+                    "inputArchive": "(select a local .tar.gz file)",
                     "mode": "asynchronous",
                     "language": "deu+eng",
                     "optimize": 2
                   }
                 },
-                "createMissingDestination": {
-                  "summary": "Explicitly create a missing destination directory",
+                "uploadArchiveSynchronous": {
+                  "summary": "Upload a tar.gz archive and wait for its result",
                   "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "archive/2026/invoices",
-                    "mode": "asynchronous",
-                    "createDestination": true
+                    "inputArchive": "(select a local .tar.gz file)",
+                    "mode": "synchronous"
                   }
                 }
-              }
-            },
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/SubmitMultipartJobRequest"
               },
               "encoding": {
                 "inputArchive": {
@@ -83,6 +67,21 @@
                 },
                 "inputArchiveContentsBase64": {
                   "contentType": "text/plain"
+                }
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitJobRequest"
+              },
+              "examples": {
+                "sharedDirectoryOptIn": {
+                  "summary": "Shared-directory submission (requires ALLOW_DIRECTORY_ACCESS=true)",
+                  "value": {
+                    "inputPath": "incoming/invoices",
+                    "outputPath": "processed/invoices",
+                    "mode": "asynchronous"
+                  }
                 }
               }
             }
@@ -886,7 +885,7 @@
           "rootPath": {
             "type": "string",
             "maxLength": 4096,
-            "description": "Optional automation destination root path sent in the X-Root-Path callback header. Requires webhookUrl."
+            "description": "Optional automation destination root path included as rootPath in the webhook JSON body and sent in the X-Root-Path callback header. Requires webhookUrl."
           }
         },
         "required": [
