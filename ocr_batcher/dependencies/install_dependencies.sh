@@ -20,6 +20,30 @@ else
     SUDO=(sudo)
 fi
 
+install_ocrmypdf_with_uv() {
+    local uv_bin uv_installer
+
+    uv_bin="$(command -v uv || true)"
+    if [[ -z "$uv_bin" ]]; then
+        uv_installer="$(mktemp)"
+        trap 'rm -f -- "$uv_installer"' EXIT
+        curl --fail --location --silent --show-error \
+            https://astral.sh/uv/install.sh --output "$uv_installer"
+        sh "$uv_installer"
+        rm -f -- "$uv_installer"
+        trap - EXIT
+        uv_bin="$HOME/.local/bin/uv"
+    fi
+    if [[ ! -x "$uv_bin" ]]; then
+        echo "[ERROR] uv installation succeeded, but uv is not executable: $uv_bin" >&2
+        exit 1
+    fi
+    "${SUDO[@]}" "$uv_bin" tool install \
+        --install-dir /opt/ocrmypdf/uv-tools \
+        --bin-dir /usr/local/bin \
+        ocrmypdf
+}
+
 case "${ID:-}" in
     debian|ubuntu)
         command -v apt-get >/dev/null 2>&1 || {
@@ -46,11 +70,12 @@ case "${ID:-}" in
             exit 1
         }
         PACKAGES=(
-            bash coreutils findutils ghostscript ocrmypdf pngquant qpdf
+            bash coreutils curl findutils ghostscript pngquant qpdf
             tesseract-ocr tmux unpaper
         )
         "${SUDO[@]}" zypper --non-interactive refresh
         "${SUDO[@]}" zypper --non-interactive install "${PACKAGES[@]}"
+        install_ocrmypdf_with_uv
         ;;
     fedora)
         command -v dnf >/dev/null 2>&1 || {
@@ -77,25 +102,7 @@ case "${ID:-}" in
         fi
         echo "[INFO] unpaper and (on RHEL 9) pngquant may require EPEL."
         "${SUDO[@]}" dnf install --assumeyes "${PACKAGES[@]}"
-        UV_BIN="$(command -v uv || true)"
-        if [[ -z "$UV_BIN" ]]; then
-            UV_INSTALLER="$(mktemp)"
-            trap 'rm -f -- "$UV_INSTALLER"' EXIT
-            curl --fail --location --silent --show-error \
-                https://astral.sh/uv/install.sh --output "$UV_INSTALLER"
-            sh "$UV_INSTALLER"
-            rm -f -- "$UV_INSTALLER"
-            trap - EXIT
-            UV_BIN="$HOME/.local/bin/uv"
-        fi
-        if [[ ! -x "$UV_BIN" ]]; then
-            echo "[ERROR] uv installation succeeded, but uv is not executable: $UV_BIN" >&2
-            exit 1
-        fi
-        "${SUDO[@]}" "$UV_BIN" tool install \
-            --install-dir /opt/ocrmypdf/uv-tools \
-            --bin-dir /usr/local/bin \
-            ocrmypdf
+        install_ocrmypdf_with_uv
         ;;
     arch|manjaro)
         if (( EUID == 0 )); then
