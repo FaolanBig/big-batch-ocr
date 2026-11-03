@@ -62,6 +62,18 @@ ocr_language=""
 ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
+read_value "Versioned API-host image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9"
+api_image="$REPLY"
+while true; do
+  image_name="${api_image%@*}"
+  image_leaf="${image_name##*/}"
+  if [[ "$api_image" != *[[:space:]]* && ( "$image_leaf" == *:* || "$api_image" =~ @sha256:[0-9a-fA-F]{64}$ ) && "$image_leaf" != *:latest ]]; then
+    break
+  fi
+  printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
+  read_value "Versioned API-host image" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9"
+  api_image="$REPLY"
+done
 read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9"
 ocr_image="$REPLY"
 while true; do
@@ -160,6 +172,7 @@ tmp_file="$(mktemp "$env_dir/.env.XXXXXX")"
 trap 'rm -f -- "$tmp_file"' EXIT
 chmod 600 "$tmp_file"
 {
+  printf 'API_IMAGE=%s\n' "$api_image"
   printf 'API_KEY=%s\n' "$api_key"
   printf 'OCR_IMAGE=%s\n' "$ocr_image"
   printf 'LOG_LEVEL=%s\n' "$log_level"
