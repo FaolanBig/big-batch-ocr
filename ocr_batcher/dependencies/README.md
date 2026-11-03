@@ -54,11 +54,12 @@ The JBIG2 encoder is installed on Debian/Ubuntu only when the distribution
 provides the `jbig2` package. OCRmyPDF remains usable without it, but optimized
 PDFs may be larger.
 
-RHEL does not provide OCRmyPDF as a system package. The installer installs its
-system dependencies with DNF, then installs `uv` using Astral's official
-installer and installs OCRmyPDF with `uv tool` into `/opt/ocrmypdf` with its
-command in `/usr/local/bin`. `unpaper` and, on RHEL 9, `pngquant` may require
-EPEL to be enabled first; the installer does not enable additional repositories
+The installer uses Astral's official `uv` installer to install OCRmyPDF on
+openSUSE/SUSE Linux Enterprise and RHEL, avoiding release-specific availability
+and Python-version constraints in the distribution package. It installs
+OCRmyPDF with `uv tool` into `/opt/ocrmypdf` and places its command in
+`/usr/local/bin`. On RHEL, `unpaper` and (on RHEL 9) `pngquant` may require EPEL
+to be enabled first; the installer does not enable additional repositories
 automatically.
 
 Arch does not provide OCRmyPDF in its official repositories. The installer
@@ -75,8 +76,8 @@ Arch; they are not OCR runtime dependencies.
 
 | Package / component | Where used | License | Copyright holder(s) |
 | --- | --- | --- | --- |
-| curl (`curl`) | Downloads Astral's uv installer on RHEL. | curl License (MIT/X derivate) | Daniel Stenberg and curl contributors |
-| uv (`uv`) | Installs OCRmyPDF in an isolated tool environment on RHEL. | Apache License 2.0 or MIT | Astral Software Inc. and contributors |
+| curl (`curl`) | Downloads Astral's uv installer on openSUSE/SUSE Linux Enterprise and RHEL. | curl License (MIT/X derivate) | Daniel Stenberg and curl contributors |
+| uv (`uv`) | Installs OCRmyPDF in an isolated tool environment on openSUSE/SUSE Linux Enterprise and RHEL. | Apache License 2.0 or MIT | Astral Software Inc. and contributors |
 | Git (`git`) | Fetches the OCRmyPDF AUR build recipe on Arch. | GNU GPL-2.0-only | Junio C. Hamano and Git contributors |
 | `base-devel` package group | Provides the compiler/build tools needed by `makepkg` on Arch. | Varies by included package | Individual package copyright holders; see installed package metadata |
 
