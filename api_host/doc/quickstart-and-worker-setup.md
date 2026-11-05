@@ -87,7 +87,11 @@ There is no `latest` tag. To build locally, use
 `bash api_host/build/build_dockerfile.sh` or, behind a TLS-inspection proxy,
 `bash api_host/build/build_dockerfile_proxied_cert.sh`; then run
 `./api_host/run/run_container.sh` without an image argument. If both local
-images exist, pass the desired image tag explicitly.
+images exist, pass the desired image tag explicitly. When neither local build
+is available, the launcher uses `API_IMAGE` from `api_host/env/.env` and asks
+before pulling it. If that environment file does not exist, the launcher asks
+whether to use an existing environment file at another path or run the
+configurator to create one.
 
 For a Compose deployment, the host does not need the repository source. Keep
 the Compose file and `api_host/env/.env`. The API-host and OCR images default
