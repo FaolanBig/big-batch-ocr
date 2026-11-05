@@ -55,6 +55,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
+| `API_IMAGE` | No (Compose only) | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9` | API-host image reference with explicit version tag or digest; `latest` is rejected by the configurator. |
 | `API_KEY` | Yes unless anonymous access is enabled | — | API key used to authenticate job requests. |
 | `ALLOW_ANONYMOUS` | No | `false` | Allow requests without a key. Do not enable on an exposed network. |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Permit shared-directory submissions. When false, submit an archive. |
@@ -62,7 +63,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container and OCR runtime. |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Absolute host path mounted at `DATA_ROOT`; ignored in Kubernetes. |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | SQLite job database; mount persistent storage at its parent directory. |
-| `OCR_IMAGE` | Yes | — | OCR image reference with explicit version tag or digest; `latest` is rejected. |
+| `OCR_IMAGE` | No (Compose only) | `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9` | OCR image reference with explicit version tag or digest; `latest` is rejected by the configurator. |
 | `OCR_JOBS` | No | `3` | OCRmyPDF threads inside each OCR container. |
 | `OCR_LANGUAGE` | No | `eng` | Default language code or `+`-separated codes, for example `deu+eng`. |
 | `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`). |
@@ -85,9 +86,24 @@ Compose service binds to localhost by default.
 
 The Compose file at [`../docker/compose.yaml`](../docker/compose.yaml) mounts
 the Docker socket, host data root at `/data`, and a named volume at
-`/var/lib/api-host`. It uses `DOCKER_GID` for socket access. The launcher
-calculates the socket group and creates/reuses the `api-host-state` named
-volume automatically.
+`/var/lib/api-host`. It pulls and runs the image specified by `API_IMAGE`; it
+does not build from the repository. This means a Compose deployment needs only
+the Compose file and `api_host/env/.env` on the host. Use the repository root
+only when building a replacement image locally.
+
+From `api_host/docker`, start the published image with:
+
+```sh
+docker compose --env-file ../env/.env -f compose.yaml pull
+docker compose --env-file ../env/.env -f compose.yaml up -d
+```
+
+The configurator writes `API_IMAGE` and `OCR_IMAGE` to the environment file.
+If either variable is unset, Compose uses its documented v1.2.9 GHCR default;
+set the variable to use another release tag or digest.
+Compose uses `DOCKER_GID` for socket access. The launcher instead calculates
+the socket group and creates/reuses the `api-host-state` named volume
+automatically.
 
 `DOCKER_DATA_ROOT` must be the same absolute host directory that the Docker
 daemon can bind-mount and the API sees at `DATA_ROOT`. The configurator

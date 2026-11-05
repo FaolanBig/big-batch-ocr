@@ -1,8 +1,6 @@
 services:
   api-host:
-    build:
-      context: ../..
-      dockerfile: api_host/docker/Dockerfile
+    image: "${API_IMAGE:-ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9}"
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -15,7 +13,7 @@ services:
       DATA_ROOT: /data
       DOCKER_DATA_ROOT: "${DOCKER_DATA_ROOT:-/srv/big-batch-ocr-data}"
       DATABASE_PATH: /var/lib/api-host/jobs.db
-      OCR_IMAGE: "${OCR_IMAGE:?set OCR_IMAGE to a versioned image reference}"
+      OCR_IMAGE: "${OCR_IMAGE:-ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9}"
       OCR_JOBS: "${OCR_JOBS:-3}"
       OCR_LANGUAGE: "${OCR_LANGUAGE:-eng}"
       OCR_OPTIMIZE: "${OCR_OPTIMIZE:-3}"

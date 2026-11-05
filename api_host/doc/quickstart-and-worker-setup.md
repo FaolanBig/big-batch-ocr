@@ -89,6 +89,20 @@ There is no `latest` tag. To build locally, use
 `./api_host/run/run_container.sh` without an image argument. If both local
 images exist, pass the desired image tag explicitly.
 
+For a Compose deployment, the host does not need the repository source. Keep
+the Compose file and `api_host/env/.env`. The API-host and OCR images default
+to v1.2.9 from GHCR; set `API_IMAGE` or `OCR_IMAGE` in that file to override
+them. Run:
+
+```sh
+cd api_host/docker
+docker compose --env-file ../env/.env -f compose.yaml pull
+docker compose --env-file ../env/.env -f compose.yaml up -d
+```
+
+The Dockerfiles are only needed for local or CI image builds; they copy
+`api_host/src` from a source checkout and are not used by Compose.
+
 The launcher uses `api_host/env/.env`, binds the Docker socket and data root,
 and persists SQLite state in the `api-host-state` named volume. It leaves an
 already-running API container unchanged. Check startup and liveness:
