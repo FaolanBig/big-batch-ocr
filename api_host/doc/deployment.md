@@ -35,14 +35,17 @@ BuildKit secret only for Go module downloads; it is not copied into the image.
 Neither build script reads runtime settings. The image includes `/bin/sh` and
 `curl` for network troubleshooting and runs the API host as a non-root user.
 
-Start a precompiled image by passing its tag to the launcher. For a local
-image, omit the argument if exactly one local build is available, or specify
-the desired tag if both are present:
+Start a precompiled image by passing its tag to the launcher (the image must
+already be local). Without an argument, the launcher uses the only available
+local build (`direct` or `proxied`); if neither is present, it uses `API_IMAGE`
+from `api_host/env/.env` and asks before pulling it:
 
 ```sh
 ./api_host/run/run_container.sh "$API_IMAGE"
 # Or:
 ./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
+# Or use a local build, falling back to the configured API_IMAGE:
+./api_host/run/run_container.sh
 ```
 
 ### Environment variables
@@ -55,7 +58,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `API_IMAGE` | No (Compose only) | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9` | API-host image reference with explicit version tag or digest; `latest` is rejected by the configurator. |
+| `API_IMAGE` | No | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9` | API-host image used by Compose and as the launcher fallback when no local build is available; version tag or digest recommended. |
 | `API_KEY` | Yes unless anonymous access is enabled | — | API key used to authenticate job requests. |
 | `ALLOW_ANONYMOUS` | No | `false` | Allow requests without a key. Do not enable on an exposed network. |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Permit shared-directory submissions. When false, submit an archive. |

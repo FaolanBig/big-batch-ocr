@@ -9,7 +9,7 @@ stopped_container=false
 
 usage() {
   printf 'Usage: %s [api-host-image]\n' "$0" >&2
-  printf 'Pass a pre-pulled GHCR image or use the only locally available direct/proxied image.\n' >&2
+  printf 'Pass a pre-pulled image, or omit it to use a local build and then API_IMAGE from %s.\n' "$env_file" >&2
 }
 
 if (( $# > 1 )); then
@@ -28,6 +28,7 @@ data_root_count=0
 data_container_root=""
 api_key=""
 allow_anonymous=""
+api_image=""
 ocr_image=""
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
@@ -51,6 +52,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     api_key="$value"
   elif [[ "$key" == "ALLOW_ANONYMOUS" ]]; then
     allow_anonymous="$value"
+  elif [[ "$key" == "API_IMAGE" ]]; then
+    api_image="$value"
   elif [[ "$key" == "OCR_IMAGE" ]]; then
     ocr_image="$value"
   fi
@@ -118,8 +121,34 @@ else
   elif [[ "$has_proxied" == true ]]; then
     image="$proxied_image"
   else
-    printf 'No API host image found. Pull a published GHCR image or build one (direct or proxied tag).\n' >&2
-    exit 1
+    if [[ -z "$api_image" ]]; then
+      printf 'No local API host image found and API_IMAGE is not set in %s.\n' "$env_file" >&2
+      exit 1
+    fi
+    image="$api_image"
+    if ! "${docker_cmd[@]}" image inspect "$image" >/dev/null 2>&1; then
+      if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        printf 'API host image is not available locally: %s\n' "$image" >&2
+        printf 'Run this script from an interactive terminal to confirm pulling API_IMAGE.\n' >&2
+        exit 1
+      fi
+      printf 'API host image is not available locally: %s\n' "$image"
+      while true; do
+        if ! IFS= read -r -p "Pull this image and start the API host? [y/N] " answer </dev/tty; then
+          printf 'Could not read pull confirmation from the terminal.\n' >&2
+          exit 1
+        fi
+        case "${answer,,}" in
+          y|yes) break ;;
+          n|no|"")
+            printf 'Image pull cancelled; %s was not started.\n' "$container_name"
+            exit 0
+            ;;
+          *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+        esac
+      done
+      "${docker_cmd[@]}" pull "$image"
+    fi
   fi
 fi
 

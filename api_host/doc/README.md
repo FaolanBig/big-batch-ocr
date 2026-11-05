@@ -8,8 +8,8 @@
 - [`../k8s/api-host.yaml`](../k8s/api-host.yaml): single-replica Kubernetes
   deployment with scoped RBAC, network policy, shared data storage, and
   persistent job state.
-- [`../run/run_container.sh`](../run/run_container.sh): starts a pre-pulled
-  GHCR API-host image or either locally built API-host image using `env/.env`.
+- [`../run/run_container.sh`](../run/run_container.sh): starts a local API-host
+  build or prompts before pulling the `API_IMAGE` configured in `env/.env`.
 - [`../config/configure_api_host.sh`](../config/configure_api_host.sh):
   interactively creates `../env/.env`, including an API key and a
   Docker-visible data root.
