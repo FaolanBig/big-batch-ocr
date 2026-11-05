@@ -9,7 +9,8 @@
   deployment with scoped RBAC, network policy, shared data storage, and
   persistent job state.
 - [`../run/run_container.sh`](../run/run_container.sh): starts a local API-host
-  build or prompts before pulling the `API_IMAGE` configured in `env/.env`.
+  build or prompts before pulling the `API_IMAGE` configured in an environment
+  file; if the default file is missing, it offers to locate or create one.
 - [`../config/configure_api_host.sh`](../config/configure_api_host.sh):
   interactively creates `../env/.env`, including an API key and a
   Docker-visible data root.

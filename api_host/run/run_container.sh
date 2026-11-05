@@ -17,7 +17,60 @@ if (( $# > 1 )); then
   exit 2
 fi
 
-if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+if [[ ! -e "$env_file" ]]; then
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    printf 'Runtime environment file is missing: %s\n' "$env_file" >&2
+    printf 'Run this script from an interactive terminal to locate or configure it.\n' >&2
+    exit 1
+  fi
+
+  while true; do
+    if ! IFS= read -r -p "Is your API-host environment file stored somewhere else? [y/N] " answer </dev/tty; then
+      printf 'Could not read environment-file choice from the terminal.\n' >&2
+      exit 1
+    fi
+    case "${answer,,}" in
+      y|yes)
+        if ! IFS= read -r -p "Path to the existing environment file: " env_file </dev/tty; then
+          printf 'Could not read the environment-file path from the terminal.\n' >&2
+          exit 1
+        fi
+        if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+          printf 'Environment file is missing or unreadable: %s\n' "$env_file" >&2
+          exit 1
+        fi
+        break
+        ;;
+      n|no|"")
+        while true; do
+          if ! IFS= read -r -p "Would you like to configure an environment file now? [y/N] " answer </dev/tty; then
+            printf 'Could not read configuration choice from the terminal.\n' >&2
+            exit 1
+          fi
+          case "${answer,,}" in
+            y|yes)
+              if ! bash "$repo_root/api_host/config/configure_api_host.sh"; then
+                printf 'API-host configuration did not complete successfully.\n' >&2
+                exit 1
+              fi
+              if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+                printf 'Configuration finished without creating a readable environment file: %s\n' "$env_file" >&2
+                exit 1
+              fi
+              break 2
+              ;;
+            n|no|"")
+              printf 'No environment file selected. Create one with api_host/config/configure_api_host.sh or copy api_host/env/.env_template to api_host/env/.env, then rerun this script.\n'
+              exit 0
+              ;;
+            *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+          esac
+        done
+        ;;
+      *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+    esac
+  done
+elif [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
   printf 'Runtime environment file is missing or unreadable: %s\n' "$env_file" >&2
   printf 'Create it with api_host/config/configure_api_host.sh or copy api_host/env/.env_template and secure it with chmod 600.\n' >&2
   exit 1

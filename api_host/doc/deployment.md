@@ -38,13 +38,15 @@ Neither build script reads runtime settings. The image includes `/bin/sh` and
 Start a precompiled image by passing its tag to the launcher (the image must
 already be local). Without an argument, the launcher uses the only available
 local build (`direct` or `proxied`); if neither is present, it uses `API_IMAGE`
-from `api_host/env/.env` and asks before pulling it:
+from the environment file and asks before pulling it. If the default
+`api_host/env/.env` does not exist, the launcher asks whether to use an
+environment file at another path or run the configurator:
 
 ```sh
 ./api_host/run/run_container.sh "$API_IMAGE"
 # Or:
 ./api_host/run/run_container.sh big-batch-ocr-api-host:proxied
-# Or use a local build, falling back to the configured API_IMAGE:
+# Or use a local build, falling back to API_IMAGE from the configured env file:
 ./api_host/run/run_container.sh
 ```
 
