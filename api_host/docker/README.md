@@ -3,10 +3,10 @@
 `compose.yaml` runs a published, non-root API-host image from GitHub Container
 Registry. It does not build from the repository or require the repository
 source to be present on the deployment host. The image defaults to
-`ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9`; set `API_IMAGE` to override
+`ghcr.io/faolanbig/big-batch-ocr_api-host:v1.3.0-rc`; set `API_IMAGE` to override
 it with another release tag or digest. Pass the runtime environment file to
 Compose. The OCR image defaults to
-`ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9`; set `OCR_IMAGE` to
+`ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.3.0-rc`; set `OCR_IMAGE` to
 override it.
 
 ```sh

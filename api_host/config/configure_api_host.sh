@@ -62,7 +62,7 @@ ocr_language=""
 ocr_optimize=""
 max_concurrent_jobs=""
 sync_wait_limit=""
-read_value "Versioned API-host image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9"
+read_value "Versioned API-host image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.3.0-rc"
 api_image="$REPLY"
 while true; do
   image_name="${api_image%@*}"
@@ -71,10 +71,10 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned API-host image" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9"
+  read_value "Versioned API-host image" "ghcr.io/faolanbig/big-batch-ocr_api-host:v1.3.0-rc"
   api_image="$REPLY"
 done
-read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9"
+read_value "Versioned OCR image (do not use the latest tag)" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.3.0-rc"
 ocr_image="$REPLY"
 while true; do
   image_name="${ocr_image%@*}"
@@ -83,7 +83,7 @@ while true; do
     break
   fi
   printf 'Enter an image reference with a version tag or digest; the latest tag is not allowed.\n' >/dev/tty
-  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9"
+  read_value "Versioned OCR image" "ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.3.0-rc"
   ocr_image="$REPLY"
 done
 

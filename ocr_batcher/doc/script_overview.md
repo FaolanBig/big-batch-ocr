@@ -56,7 +56,7 @@ The published container starts OCR automatically without tmux. Mount the
 input read-only at `/source` and the output at `/destination`:
 
 ```bash
-TAG=v1.2.9
+TAG=v1.3.0-rc
 docker run --rm -it \
   -v /path/to/source:/source:ro \
   -v /path/to/target:/destination \

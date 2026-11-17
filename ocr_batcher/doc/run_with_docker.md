@@ -11,7 +11,7 @@ Images are published to
 Use an available release tag; there is no `latest` tag:
 
 ```bash
-TAG=v1.2.9
+TAG=v1.3.0-rc
 IMAGE="ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:$TAG"
 
 docker pull "$IMAGE"
@@ -36,14 +36,14 @@ cd ocr_batcher/docker
 sudo bash build_dockerfile.sh
 ```
 
-The script builds `ocr_batch_sequencial:v1.2.9`. Run it with the same mounts:
+The script builds `ocr_batch_sequencial:v1.3.0-rc`. Run it with the same mounts:
 
 ```bash
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
   -e OCR_JOBS=4 \
-  ocr_batch_sequencial:v1.2.9
+  ocr_batch_sequencial:v1.3.0-rc
 ```
 
 ## Configure the run

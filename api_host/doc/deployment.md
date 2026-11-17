@@ -11,7 +11,7 @@ Use a published API-host image from
 with an explicit release tag or immutable digest. There is no `latest` tag:
 
 ```sh
-TAG=v1.2.9
+TAG=v1.3.0-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ```
@@ -60,7 +60,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `API_IMAGE` | No | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9` | API-host image used by Compose and as the launcher fallback when no local build is available; version tag or digest recommended. |
+| `API_IMAGE` | No | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.3.0-rc` | API-host image used by Compose and as the launcher fallback when no local build is available; version tag or digest recommended. |
 | `API_KEY` | Yes unless anonymous access is enabled | — | API key used to authenticate job requests. |
 | `ALLOW_ANONYMOUS` | No | `false` | Allow requests without a key. Do not enable on an exposed network. |
 | `ALLOW_DIRECTORY_ACCESS` | No | `false` | Permit shared-directory submissions. When false, submit an archive or one direct PDF. |
@@ -68,7 +68,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container and OCR runtime. |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Absolute host path mounted at `DATA_ROOT`; ignored in Kubernetes. |
 | `DATABASE_PATH` | No | `/var/lib/api-host/jobs.db` | SQLite job database; mount persistent storage at its parent directory. |
-| `OCR_IMAGE` | No (Compose only) | `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.2.9` | OCR image reference with explicit version tag or digest; `latest` is rejected by the configurator. |
+| `OCR_IMAGE` | No (Compose only) | `ghcr.io/faolanbig/big-batch-ocr_ocr-sequencial:v1.3.0-rc` | OCR image reference with explicit version tag or digest; `latest` is rejected by the configurator. |
 | `OCR_JOBS` | No | `3` | OCRmyPDF threads inside each OCR container. |
 | `OCR_LANGUAGE` | No | `eng` | Default language code or `+`-separated codes, for example `deu+eng`. |
 | `OCR_OPTIMIZE` | No | `3` | Default OCRmyPDF optimization level (`0`–`3`). |
@@ -104,7 +104,7 @@ docker compose --env-file ../env/.env -f compose.yaml up -d
 ```
 
 The configurator writes `API_IMAGE` and `OCR_IMAGE` to the environment file.
-If either variable is unset, Compose uses its documented v1.2.9 GHCR default;
+If either variable is unset, Compose uses its documented v1.3.0-rc GHCR default;
 set the variable to use another release tag or digest.
 Compose uses `DOCKER_GID` for socket access. The launcher instead calculates
 the socket group and creates/reuses the `api-host-state` named volume

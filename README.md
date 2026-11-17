@@ -74,7 +74,7 @@ with a release available in the
 there is no `latest` tag.
 
 ```bash
-TAG=v1.2.9
+TAG=v1.3.0-rc
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
@@ -112,7 +112,7 @@ image can be pulled from the
 and started with:
 
 ```bash
-TAG=v1.2.9
+TAG=v1.3.0-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"

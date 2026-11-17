@@ -75,7 +75,7 @@ automatically.
 Use a published API-host image:
 
 ```sh
-TAG=v1.2.9
+TAG=v1.3.0-rc
 API_IMAGE="ghcr.io/faolanbig/big-batch-ocr_api-host:$TAG"
 sudo docker pull "$API_IMAGE"
 ./api_host/run/run_container.sh "$API_IMAGE"
@@ -95,7 +95,7 @@ configurator to create one.
 
 For a Compose deployment, the host does not need the repository source. Keep
 the Compose file and `api_host/env/.env`. The API-host and OCR images default
-to v1.2.9 from GHCR; set `API_IMAGE` or `OCR_IMAGE` in that file to override
+to v1.3.0-rc from GHCR; set `API_IMAGE` or `OCR_IMAGE` in that file to override
 them. Run:
 
 ```sh

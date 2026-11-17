@@ -59,7 +59,7 @@ host. Replace the example release tag with one available in the
 There is no `latest` tag.
 
 ```bash
-TAG=v1.2.9
+TAG=v1.3.0-rc
 docker run --rm -it \
   -v "/path/to/input:/source:ro" \
   -v "/path/to/output:/destination" \
