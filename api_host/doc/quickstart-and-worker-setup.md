@@ -177,7 +177,7 @@ while :; do
 done
 ```
 
-After success, download the result archive:
+After an archive upload succeeds, download the result archive:
 
 ```sh
 curl --fail-with-body --silent --show-error \
@@ -194,8 +194,9 @@ must be an integer from `0` to `3`. Omitted options use the server defaults.
 
 ### Synchronous submissions
 
-Use `mode=synchronous` to wait for completion and download the result archive
-in the submit response. Save the response body as a file:
+Use `mode=synchronous` to wait for completion. An archive upload returns a
+result archive in the submit response; a direct-PDF upload returns an
+uncompressed PDF. For example, save an archive response body as a file:
 
 ```sh
 curl --fail-with-body --silent --show-error \

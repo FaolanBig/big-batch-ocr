@@ -34,9 +34,10 @@ Missing output paths can be created only when the caller sets
 ## Job lifecycle
 
 Submissions select `synchronous` or `asynchronous` mode. Synchronous requests
-wait up to `SYNC_WAIT_LIMIT_SECONDS` and return a `.tar.gz` result on success;
-the completed job ID is in the `X-Job-ID` header. If the wait limit expires,
-the job continues and the response provides its ID and status URL.
+wait up to `SYNC_WAIT_LIMIT_SECONDS` and return a `.tar.gz` result for archive
+uploads or an uncompressed PDF for a direct-PDF upload. The completed job ID
+is in the `X-Job-ID` header. If the wait limit expires, the job continues and
+the response provides its ID and status URL.
 Asynchronous requests return a job ID and status URL immediately. Jobs are
 queued FIFO and run up to `MAX_CONCURRENT_JOBS` at once. `OCR_JOBS` controls
 OCRmyPDF threads inside each OCR container, not the queue concurrency.

@@ -63,7 +63,7 @@ UID/GID `65532` and saves the environment file with mode `0600`.
 | `API_IMAGE` | No | `ghcr.io/faolanbig/big-batch-ocr_api-host:v1.2.9` | API-host image used by Compose and as the launcher fallback when no local build is available; version tag or digest recommended. |
 | `API_KEY` | Yes unless anonymous access is enabled | — | API key used to authenticate job requests. |
 | `ALLOW_ANONYMOUS` | No | `false` | Allow requests without a key. Do not enable on an exposed network. |
-| `ALLOW_DIRECTORY_ACCESS` | No | `false` | Permit shared-directory submissions. When false, submit an archive. |
+| `ALLOW_DIRECTORY_ACCESS` | No | `false` | Permit shared-directory submissions. When false, submit an archive or one direct PDF. |
 | `LOG_LEVEL` | No | `INFO` | Structured JSON log verbosity: `DEBUG`, `INFO`, `WARN`, or `ERROR`. |
 | `DATA_ROOT` | No | `/data` | Existing data directory inside the API container and OCR runtime. |
 | `DOCKER_DATA_ROOT` | Docker only | `/srv/big-batch-ocr-data` in Compose | Absolute host path mounted at `DATA_ROOT`; ignored in Kubernetes. |
@@ -209,7 +209,7 @@ status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
 Poll `statusUrl` until the job reaches `succeeded` or `failed`, then download
-the result:
+the archive result:
 
 ```sh
 while :; do
@@ -230,6 +230,23 @@ curl --fail-with-body --silent --show-error \
   -o "result-${job_id}.tar.gz"
 ```
 
+For one PDF, submit its file directly instead of creating an archive. The
+processed response is an uncompressed PDF:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --oauth2-bearer "$API_KEY" \
+  -F "inputPDF=@./invoice.pdf;type=application/pdf" \
+  -F "mode=synchronous" \
+  -o ./invoice-processed.pdf \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+In asynchronous mode, poll the job as usual; its
+`GET /api/v1/jobs/{jobId}/result` response is also an uncompressed PDF.
+Direct-PDF submissions accept exactly one PDF file, while archive uploads
+continue to support multiple files.
+
 Multipart requests are limited to 1 GiB and extracted archive contents to
 10 GiB. Only regular files and directories are accepted in an archive. The
 API retains each uploaded-job workspace after download so clients can
@@ -238,11 +255,12 @@ download again. Delete one terminal job with
 `POST /api/v1/jobs/cleanup` and `{"scope":"uploads"}`. Cancellation also
 retains data until cleanup.
 
-For synchronous execution, send the same multipart fields with
+For synchronous archive execution, send the same multipart fields with
 `mode=synchronous`. Success returns the output archive and the job ID in
-`X-Job-ID`. If `SYNC_WAIT_LIMIT_SECONDS` expires, the job continues and a
-`504` response includes its job ID and status URL; poll the job instead of
-submitting it again.
+`X-Job-ID`; a direct-PDF submission instead returns its processed PDF. If
+`SYNC_WAIT_LIMIT_SECONDS` expires, the job continues and a `504` response
+includes its job ID and status URL; poll the job instead of submitting it
+again.
 
 Multipart clients that do not send a file object can use
 `inputArchiveContents` for raw archive bytes or

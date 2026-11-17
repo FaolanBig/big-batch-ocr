@@ -9,6 +9,7 @@ require bearer authentication unless `ALLOW_ANONYMOUS=true`:
 `POST /api/v1/jobs`, `GET` and `DELETE /api/v1/jobs/{jobId}`,
 `POST /api/v1/jobs/{jobId}/cancel`, `POST /api/v1/jobs/{jobId}/resume`,
 `GET /api/v1/jobs/{jobId}/result`, and `POST /api/v1/jobs/cleanup`.
-Submissions can upload a `.tar.gz` archive directly; directory-based requests
-are disabled unless `ALLOW_DIRECTORY_ACCESS=true`. See the OpenAPI
-specification for request and response schemas.
+Submissions can upload a `.tar.gz` archive or one PDF directly; a direct PDF
+is returned without compression. Directory-based requests are disabled unless
+`ALLOW_DIRECTORY_ACCESS=true`. See the OpenAPI specification for request and
+response schemas.

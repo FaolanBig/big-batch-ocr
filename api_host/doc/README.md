@@ -1,8 +1,8 @@
 # API-host documentation
 
 - [`quickstart-and-worker-setup.md`](quickstart-and-worker-setup.md): single
-  Docker-host setup, worker model, direct archive upload, polling, result
-  download, webhooks, cleanup, and troubleshooting.
+  Docker-host setup, worker model, archive and direct-PDF upload, polling,
+  result download, webhooks, cleanup, and troubleshooting.
 - [`deployment.md`](deployment.md): runtime configuration, Docker and
   Kubernetes deployment, API contract examples, storage, and security.
 - [`../k8s/api-host.yaml`](../k8s/api-host.yaml): single-replica Kubernetes
