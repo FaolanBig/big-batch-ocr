@@ -13,9 +13,15 @@ workspace. The complete request is limited to 1 GiB and extracted contents to
 10 GiB. Archive entries must be regular files or directories; unsafe paths and
 other entry types are rejected.
 
+Alternatively, upload exactly one PDF file in the multipart `inputPDF` field.
+This keeps the same isolated workspace and does not replace archive uploads.
+Synchronous submissions return the processed PDF directly, and asynchronous
+jobs return the same uncompressed PDF from their result endpoint.
+
 For asynchronous jobs, download results with
-`GET /api/v1/jobs/{jobId}/result` after success. Synchronous submissions
-return the result archive directly. Results may be downloaded repeatedly.
+`GET /api/v1/jobs/{jobId}/result` after success. Synchronous archive
+submissions return the result archive directly; synchronous direct-PDF
+submissions return the processed PDF. Results may be downloaded repeatedly.
 The workspace remains until explicitly removed through the job DELETE or
 cleanup endpoint.
 

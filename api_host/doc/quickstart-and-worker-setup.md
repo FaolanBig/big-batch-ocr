@@ -145,6 +145,22 @@ job_id="$(printf '%s\n' "$response" | jq -r .jobId)"
 status_url="$(printf '%s\n' "$response" | jq -r .statusUrl)"
 ```
 
+For a single PDF, upload it directly with `inputPDF` instead. No archive
+creation is needed; the synchronous response or asynchronous result endpoint
+returns the processed PDF without compression:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --oauth2-bearer "$API_KEY" \
+  -F "inputPDF=@./invoice.pdf;type=application/pdf" \
+  -F "mode=synchronous" \
+  --output ./invoice-processed.pdf \
+  http://127.0.0.1:8080/api/v1/jobs
+```
+
+Only one PDF may be included in a direct-PDF submission. Continue using
+`inputArchive` when submitting multiple files.
+
 Poll the status URL until `status` is `succeeded` or `failed`:
 
 ```sh
