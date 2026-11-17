@@ -9,7 +9,7 @@ stopped_container=false
 
 usage() {
   printf 'Usage: %s [api-host-image]\n' "$0" >&2
-  printf 'Pass a pre-pulled GHCR image or use the only locally available direct/proxied image.\n' >&2
+  printf 'Pass a pre-pulled image, or omit it to use a local build and then API_IMAGE from %s.\n' "$env_file" >&2
 }
 
 if (( $# > 1 )); then
@@ -17,7 +17,60 @@ if (( $# > 1 )); then
   exit 2
 fi
 
-if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+if [[ ! -e "$env_file" ]]; then
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    printf 'Runtime environment file is missing: %s\n' "$env_file" >&2
+    printf 'Run this script from an interactive terminal to locate or configure it.\n' >&2
+    exit 1
+  fi
+
+  while true; do
+    if ! IFS= read -r -p "Is your API-host environment file stored somewhere else? [y/N] " answer </dev/tty; then
+      printf 'Could not read environment-file choice from the terminal.\n' >&2
+      exit 1
+    fi
+    case "${answer,,}" in
+      y|yes)
+        if ! IFS= read -r -p "Path to the existing environment file: " env_file </dev/tty; then
+          printf 'Could not read the environment-file path from the terminal.\n' >&2
+          exit 1
+        fi
+        if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+          printf 'Environment file is missing or unreadable: %s\n' "$env_file" >&2
+          exit 1
+        fi
+        break
+        ;;
+      n|no|"")
+        while true; do
+          if ! IFS= read -r -p "Would you like to configure an environment file now? [y/N] " answer </dev/tty; then
+            printf 'Could not read configuration choice from the terminal.\n' >&2
+            exit 1
+          fi
+          case "${answer,,}" in
+            y|yes)
+              if ! bash "$repo_root/api_host/config/configure_api_host.sh"; then
+                printf 'API-host configuration did not complete successfully.\n' >&2
+                exit 1
+              fi
+              if [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
+                printf 'Configuration finished without creating a readable environment file: %s\n' "$env_file" >&2
+                exit 1
+              fi
+              break 2
+              ;;
+            n|no|"")
+              printf 'No environment file selected. Create one with api_host/config/configure_api_host.sh or copy api_host/env/.env_template to api_host/env/.env, then rerun this script.\n'
+              exit 0
+              ;;
+            *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+          esac
+        done
+        ;;
+      *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+    esac
+  done
+elif [[ ! -f "$env_file" || ! -r "$env_file" ]]; then
   printf 'Runtime environment file is missing or unreadable: %s\n' "$env_file" >&2
   printf 'Create it with api_host/config/configure_api_host.sh or copy api_host/env/.env_template and secure it with chmod 600.\n' >&2
   exit 1
@@ -28,6 +81,7 @@ data_root_count=0
 data_container_root=""
 api_key=""
 allow_anonymous=""
+api_image=""
 ocr_image=""
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
@@ -51,6 +105,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     api_key="$value"
   elif [[ "$key" == "ALLOW_ANONYMOUS" ]]; then
     allow_anonymous="$value"
+  elif [[ "$key" == "API_IMAGE" ]]; then
+    api_image="$value"
   elif [[ "$key" == "OCR_IMAGE" ]]; then
     ocr_image="$value"
   fi
@@ -118,8 +174,34 @@ else
   elif [[ "$has_proxied" == true ]]; then
     image="$proxied_image"
   else
-    printf 'No API host image found. Pull a published GHCR image or build one (direct or proxied tag).\n' >&2
-    exit 1
+    if [[ -z "$api_image" ]]; then
+      printf 'No local API host image found and API_IMAGE is not set in %s.\n' "$env_file" >&2
+      exit 1
+    fi
+    image="$api_image"
+    if ! "${docker_cmd[@]}" image inspect "$image" >/dev/null 2>&1; then
+      if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        printf 'API host image is not available locally: %s\n' "$image" >&2
+        printf 'Run this script from an interactive terminal to confirm pulling API_IMAGE.\n' >&2
+        exit 1
+      fi
+      printf 'API host image is not available locally: %s\n' "$image"
+      while true; do
+        if ! IFS= read -r -p "Pull this image and start the API host? [y/N] " answer </dev/tty; then
+          printf 'Could not read pull confirmation from the terminal.\n' >&2
+          exit 1
+        fi
+        case "${answer,,}" in
+          y|yes) break ;;
+          n|no|"")
+            printf 'Image pull cancelled; %s was not started.\n' "$container_name"
+            exit 0
+            ;;
+          *) printf 'Please answer yes or no.\n' >/dev/tty ;;
+        esac
+      done
+      "${docker_cmd[@]}" pull "$image"
+    fi
   fi
 fi
 

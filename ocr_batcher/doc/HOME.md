@@ -1,8 +1,12 @@
-# Big Batch OCR documentation
+# OCR batcher documentation
 
 This directory documents the current OCR workflow in this repository. The supported native entry point is [`src/ocr_sequencial.sh`](../src/ocr_sequencial.sh); the Docker image runs its container-specific counterpart, [`docker/ocr_sequencial_docker.sh`](../docker/ocr_sequencial_docker.sh). The older [`src/ocr.sh`](../src/ocr.sh) is deprecated.
 
-Both current entry points scan a source directory recursively, preserve its relative directory structure in the destination, copy non-PDF files, and process PDFs sequentially with OCRmyPDF. They use temporary output files and per-PDF SHA-256 markers so successful work can be reused on a later run.
+Both current entry points scan a source directory recursively, preserve its
+relative directory structure in the destination, copy non-PDF files, and
+process PDFs sequentially with OCRmyPDF. Successful PDF markers include the
+source checksum, language, and optimization setting, so matching results can
+be reused on a later run.
 
 ## Documentation
 
@@ -15,7 +19,10 @@ Both current entry points scan a source directory recursively, preserve its rela
 
 ## Quick reference
 
-Native runs require Bash, OCRmyPDF, tmux, and the utilities checked or used by the script (`realpath`, `sha256sum`, `cmp`, `find`, `nproc`, and others). Start the script from inside an existing tmux session:
+Native runs require Linux, Bash, OCRmyPDF and dependencies, tmux, and
+utilities checked or used by the script (`realpath`, `sha256sum`, `cmp`,
+`find`, `nproc`, and others). Start the script from inside an existing tmux
+session:
 
 ```bash
 bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
@@ -23,4 +30,9 @@ bash src/ocr_sequencial.sh "/path/to/source" "/path/to/target"
 
 The Docker image does not require tmux on the host. Mount the input at `/source` (read-only is recommended) and the output at `/destination`; see [Run OCR in Docker](./run_with_docker.md).
 
-Both entry points require the source directory to exist and reject identical source/target directories or a target inside the source. PDF detection is based on a case-insensitive `.pdf` suffix. Both accept a positive-integer `OCR_JOBS` override and otherwise use 75% of the logical CPU count reported by `nproc --all`.
+Both entry points require the source directory to exist and reject identical
+source/target directories or a target inside the source. PDF detection is
+based on a case-insensitive `.pdf` suffix. Both accept a positive-integer
+`OCR_JOBS` override and otherwise use 75% of the logical CPU count reported by
+`nproc --all`; this sets OCRmyPDF threads within each file, not file-level
+parallelism.

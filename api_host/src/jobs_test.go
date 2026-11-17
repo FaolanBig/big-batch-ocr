@@ -60,6 +60,7 @@ func TestJobStoreMigratesAndPersistsOCROptions(t *testing.T) {
 	}
 	created, err := store.Create("in", "out", "/in", "/out", OCROptions{
 		Language: "deu+eng", Optimize: 0, WebhookInsecureSkipVerify: true,
+		DirectPDF: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,9 +69,10 @@ func TestJobStoreMigratesAndPersistsOCROptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.OCRLanguage != "deu+eng" || reloaded.OCROptimize != 0 || !reloaded.WebhookInsecureSkipVerify {
-		t.Fatalf("reloaded job options = OCR %q/%d, insecure webhook TLS %t",
-			reloaded.OCRLanguage, reloaded.OCROptimize, reloaded.WebhookInsecureSkipVerify)
+	if reloaded.OCRLanguage != "deu+eng" || reloaded.OCROptimize != 0 ||
+		!reloaded.WebhookInsecureSkipVerify || !reloaded.DirectPDF {
+		t.Fatalf("reloaded job options = OCR %q/%d, insecure webhook TLS %t, direct PDF %t",
+			reloaded.OCRLanguage, reloaded.OCROptimize, reloaded.WebhookInsecureSkipVerify, reloaded.DirectPDF)
 	}
 }
 

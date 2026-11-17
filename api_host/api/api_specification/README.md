@@ -1,3 +1,6 @@
-# API Specification
+# API specification
 
-This directory is for the versioned API specification, including the OpenAPI document used to describe endpoints, requests, and responses.
+[`main_api_specification_api_host.json`](main_api_specification_api_host.json)
+is the OpenAPI 3.1 contract for the API host. It documents both the
+recommended multipart `.tar.gz` upload flow and the optional shared-directory
+request format, along with job lifecycle endpoints and responses.

@@ -4,6 +4,6 @@ variables:
     value: https://api-host.brave-cobra.vcluster.k8s.vector.int/
     description: base URL
   - name: jobId
-    value: job_4236bd7a5301e18cf388
+    value: job_93bc44241ec5115590a5
   - secret: true
     name: api_key

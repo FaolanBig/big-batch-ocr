@@ -11,11 +11,9 @@ assignees: ''
 A clear and concise description of what the bug is.
 
 **To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+1. Select the execution mode (native script, Docker, or API host).
+2. Provide the commands or sanitized API request needed to reproduce it.
+3. Describe the observed result.
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
@@ -23,16 +21,16 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+**Environment**
+- Big Batch OCR version, tag, or commit:
+- Execution mode (native, Docker, Docker API host, or Kubernetes API host):
+- Operating system and version:
+- Docker/OCRmyPDF/Tesseract versions, if applicable:
+- API backend and relevant configuration, if applicable:
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**Logs**
+Paste relevant sanitized log output. Remove API keys, tokens, private paths,
+and document contents before sharing.
 
 **Additional context**
 Add any other context about the problem here.

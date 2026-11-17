@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -339,6 +340,124 @@ func TestMultipartArchiveJobAndDownloadResult(t *testing.T) {
 	}
 	if _, err := os.Stat(jobDirectory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("uploaded workspace remains after explicit job deletion: err=%v", err)
+	}
+}
+
+func TestDirectPDFSubmissionReturnsPDFSynchronouslyAndAsynchronously(t *testing.T) {
+	for _, mode := range []string{"synchronous", "asynchronous"} {
+		t.Run(mode, func(t *testing.T) {
+			api, store, cleanup := testAPI(t, testExecutor{run: func(_ context.Context, job Job, markRunning func(string) error, _ func([]byte) error) (int, error) {
+				if !job.DirectPDF {
+					return 1, errors.New("direct PDF format was not persisted on the job")
+				}
+				if content, err := os.ReadFile(filepath.Join(job.InputHost, "input.pdf")); err != nil || string(content) != "%PDF-source" {
+					return 1, fmt.Errorf("direct PDF input = %q, err = %v", content, err)
+				}
+				if err := markRunning("container-id"); err != nil {
+					return 1, err
+				}
+				return 0, os.WriteFile(filepath.Join(job.OutputHost, "input.pdf"), []byte("%PDF-processed"), 0o640)
+			}}, time.Second)
+			defer cleanup()
+			api.config.AllowDirectoryAccess = false
+
+			body, contentType := multipartPDFRequest(t, mode, []byte("%PDF-source"))
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", body)
+			request.Header.Set("Content-Type", contentType)
+			request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, request)
+
+			var jobID string
+			if mode == "synchronous" {
+				if response.Code != http.StatusOK {
+					t.Fatalf("direct PDF submission status = %d, body: %s", response.Code, response.Body.String())
+				}
+				jobID = response.Header().Get("X-Job-ID")
+				assertPDFResult(t, response, jobID, "%PDF-processed")
+			} else {
+				if response.Code != http.StatusAccepted {
+					t.Fatalf("direct PDF submission status = %d, body: %s", response.Code, response.Body.String())
+				}
+				var accepted acknowledgement
+				if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+					t.Fatal(err)
+				}
+				jobID = accepted.JobID
+				job := waitForJobStatus(t, store, jobID, "succeeded")
+				if !job.DirectPDF {
+					t.Fatal("direct PDF format was not persisted for asynchronous result download")
+				}
+				response = httptest.NewRecorder()
+				request = httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID+"/result", nil)
+				request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+				api.ServeHTTP(response, request)
+				if response.Code != http.StatusOK {
+					t.Fatalf("asynchronous PDF result status = %d, body: %s", response.Code, response.Body.String())
+				}
+				assertPDFResult(t, response, jobID, "%PDF-processed")
+			}
+		})
+	}
+}
+
+func TestDirectPDFSubmissionRejectsMultipleOrMixedInputs(t *testing.T) {
+	api, _, cleanup := testAPI(t, testExecutor{run: func(context.Context, Job, func(string) error, func([]byte) error) (int, error) {
+		t.Fatal("invalid PDF submission started a job")
+		return 1, nil
+	}}, time.Second)
+	defer cleanup()
+
+	for _, addFiles := range []func(*testing.T, *multipart.Writer){
+		func(t *testing.T, writer *multipart.Writer) {
+			part, err := writer.CreateFormFile("inputPDF", "first.pdf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(part, "%PDF-first")
+			part, err = writer.CreateFormFile("inputPDF", "second.pdf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(part, "%PDF-second")
+		},
+		func(t *testing.T, writer *multipart.Writer) {
+			pdf, err := writer.CreateFormFile("inputPDF", "input.pdf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(pdf, "%PDF-source")
+			archive, err := writer.CreateFormFile("inputArchive", "input.tar.gz")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = archive.Write(testArchive(t, "input.pdf", "%PDF-source"))
+		},
+		func(t *testing.T, writer *multipart.Writer) {
+			part, err := writer.CreateFormFile("inputPDF", "input.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(part, "not a PDF upload")
+		},
+	} {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		if err := writer.WriteField("mode", "asynchronous"); err != nil {
+			t.Fatal(err)
+		}
+		addFiles(t, writer)
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", &body)
+		request.Header.Set("Content-Type", writer.FormDataContentType())
+		request.Header.Set("Authorization", "Bearer "+api.config.APIKey)
+		response := httptest.NewRecorder()
+		api.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid direct PDF request status = %d, body: %s", response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -1558,6 +1677,39 @@ func multipartArchiveRequestWithFields(t *testing.T, archive []byte, withArchive
 		t.Fatal(err)
 	}
 	return &body, writer.FormDataContentType()
+}
+
+func multipartPDFRequest(t *testing.T, mode string, pdf []byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("mode", mode); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("inputPDF", "source.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(pdf); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &body, writer.FormDataContentType()
+}
+
+func assertPDFResult(t *testing.T, response *httptest.ResponseRecorder, jobID, content string) {
+	t.Helper()
+	if response.Header().Get("Content-Type") != "application/pdf" {
+		t.Fatalf("PDF result content type = %q", response.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(response.Header().Get("Content-Disposition"), jobID+".pdf") {
+		t.Fatalf("PDF result disposition = %q", response.Header().Get("Content-Disposition"))
+	}
+	if response.Body.String() != content {
+		t.Fatalf("PDF result body = %q, want %q", response.Body.String(), content)
+	}
 }
 
 func cancelTestJob(api *API, id string) *httptest.ResponseRecorder {

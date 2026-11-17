@@ -24,7 +24,8 @@ const maxRequestBytes int64 = 1 << 30
 const maxMultipartTextFieldBytes int64 = 1 << 20
 
 type archiveUpload struct {
-	path string
+	path      string
+	directPDF bool
 }
 
 func (a *archiveUpload) Open() (io.ReadCloser, error) {
@@ -56,6 +57,7 @@ type submitRequest struct {
 	RootPath                       string          `json:"rootPath"`
 	WebhookInsecureSkipVerifyValue json.RawMessage `json:"webhookInsecureSkipVerify"`
 	WebhookInsecureSkipVerify      bool            `json:"-"`
+	DirectPDF                      bool            `json:"-"`
 	Language                       *string         `json:"-"`
 	Optimize                       *int            `json:"-"`
 	CreateDestinationValue         bool            `json:"-"`
@@ -200,7 +202,7 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	if archive != nil {
 		defer func() {
 			if err := archive.Remove(); err != nil && !errors.Is(err, os.ErrNotExist) {
-				a.logger.Warn("could not remove temporary archive upload", "error", err)
+				a.logger.Warn("could not remove temporary uploaded input", "error", err)
 			}
 		}()
 	}
@@ -242,9 +244,10 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	options.WebhookSecret = request.WebhookSecret
 	options.RootPath = request.RootPath
 	options.WebhookInsecureSkipVerify = request.WebhookInsecureSkipVerify
+	options.DirectPDF = request.DirectPDF
 	if archive == nil && !a.config.AllowDirectoryAccess {
 		writeProblem(w, http.StatusForbidden, "Directory submissions disabled", "DIRECTORY_ACCESS_DISABLED",
-			"Directory-based submissions are disabled; upload an inputArchive instead.")
+			"Directory-based submissions are disabled; upload an inputArchive or inputPDF instead.")
 		return
 	}
 	var uploadDirectory string
@@ -252,44 +255,61 @@ func (a *API) submit(w http.ResponseWriter, r *http.Request) {
 	if archive != nil {
 		uploadedJobID, err = newJobID()
 		if err != nil {
-			a.logger.Error("could not allocate OCR job ID", "error", err)
+			a.logger.Error("could not allocate uploaded job ID", "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
-				"The input archive could not be accepted.")
+				"The uploaded input could not be accepted.")
 			return
 		}
 		uploadDirectory, err = createJobWorkspace(a.config.DataRoot, uploadedJobID)
 		if err != nil {
-			a.logger.Error("could not create archive job workspace", "job_id", uploadedJobID, "error", err)
+			a.logger.Error("could not create uploaded job workspace", "job_id", uploadedJobID, "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
-				"The input archive could not be accepted.")
+				"The uploaded input could not be accepted.")
 			return
 		}
 		defer func() {
 			if uploadDirectory != "" {
 				if err := os.RemoveAll(uploadDirectory); err != nil {
-					a.logger.Warn("could not remove rejected archive upload", "error", err)
+					a.logger.Warn("could not remove rejected uploaded workspace", "error", err)
 				}
 			}
 		}()
 		input, openErr := archive.Open()
 		if openErr != nil {
-			writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
-				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
+			writeProblem(w, http.StatusBadRequest, "Invalid input file", "INVALID_UPLOAD",
+				"The uploaded input file could not be read.")
 			return
 		}
 		inputDirectory := filepath.Join(uploadDirectory, "input")
-		extractErr := extractTarGzip(input, inputDirectory)
+		var extractErr error
+		if archive.directPDF {
+			output, createErr := os.OpenFile(filepath.Join(inputDirectory, "input.pdf"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+			if createErr != nil {
+				extractErr = createErr
+			} else {
+				_, copyErr := io.Copy(output, input)
+				closeErr := output.Close()
+				extractErr = errors.Join(copyErr, closeErr)
+			}
+		} else {
+			extractErr = extractTarGzip(input, inputDirectory)
+		}
 		closeErr := input.Close()
 		if err := errors.Join(extractErr, closeErr); err != nil {
-			writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
-				"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
+			if archive.directPDF {
+				writeProblem(w, http.StatusBadRequest, "Invalid input file", "INVALID_UPLOAD",
+					"The uploaded PDF could not be stored.")
+			} else {
+				writeProblem(w, http.StatusBadRequest, "Invalid archive", "INVALID_ARCHIVE",
+					"The uploaded file must be a valid tar.gz archive containing regular files and directories.")
+			}
 			return
 		}
 		relative, err := filepath.Rel(a.config.DataRoot, inputDirectory)
 		if err != nil {
-			a.logger.Error("could not resolve archive upload path", "error", err)
+			a.logger.Error("could not resolve uploaded input path", "error", err)
 			writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
-				"The input archive could not be accepted.")
+				"The uploaded input could not be accepted.")
 			return
 		}
 		request.InputPath = filepath.ToSlash(relative)
@@ -421,23 +441,30 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 		seen[name] = true
 
 		switch name {
-		case "inputArchive", "inputArchiveContents", "inputArchiveContentsBase64":
+		case "inputArchive", "inputArchiveContents", "inputArchiveContentsBase64", "inputPDF":
 			if archiveField != "" {
-				return submitRequest{}, archive, errors.New("only one archive input is allowed")
+				return submitRequest{}, archive, errors.New("only one uploaded input file is allowed")
 			}
 			if name == "inputArchiveContentsBase64" && part.FileName() != "" {
 				return submitRequest{}, archive, errors.New("base64 archive contents must be a text field")
 			}
+			if name == "inputPDF" && (part.FileName() == "" || !strings.EqualFold(filepath.Ext(part.FileName()), ".pdf")) {
+				return submitRequest{}, archive, errors.New("inputPDF must be a PDF file")
+			}
 			if filename := part.FileName(); filename != "" &&
-				!strings.HasSuffix(strings.ToLower(filename), ".tar.gz") {
+				name != "inputPDF" && !strings.HasSuffix(strings.ToLower(filename), ".tar.gz") {
 				return submitRequest{}, archive, errors.New("input archive must have a .tar.gz filename")
 			}
 			archiveField = name
-			file, createErr := os.CreateTemp("", "big-batch-ocr-archive-*.tar.gz")
+			suffix := ".tar.gz"
+			if name == "inputPDF" {
+				suffix = ".pdf"
+			}
+			file, createErr := os.CreateTemp("", "big-batch-ocr-upload-*"+suffix)
 			if createErr != nil {
 				return submitRequest{}, archive, createErr
 			}
-			archive = &archiveUpload{path: file.Name()}
+			archive = &archiveUpload{path: file.Name(), directPDF: name == "inputPDF"}
 			source := io.Reader(part)
 			if name == "inputArchiveContentsBase64" {
 				source = base64.NewDecoder(base64.StdEncoding.Strict(), part)
@@ -505,14 +532,15 @@ func parseMultipartSubmitRequest(reader *multipart.Reader) (request submitReques
 		}
 	}
 	if archive != nil && (inputPath != "" || outputPath != "") {
-		return submitRequest{}, archive, errors.New("archive uploads cannot include inputPath or outputPath")
+		return submitRequest{}, archive, errors.New("uploaded files cannot include inputPath or outputPath")
 	}
 	if archive == nil && inputPath == "" {
-		return submitRequest{}, nil, errors.New("inputPath is required without inputArchive")
+		return submitRequest{}, nil, errors.New("an input source is required")
 	}
 	request = submitRequest{
 		InputPath: inputPath, OutputPath: outputPath, Mode: mode,
 		CreateDestinationValue: create, Language: request.Language, Optimize: request.Optimize,
+		DirectPDF:  archive != nil && archive.directPDF,
 		WebhookURL: fields["webhookUrl"], WebhookSecret: fields["webhookSecret"], RootPath: fields["rootPath"],
 		WebhookInsecureSkipVerify: request.WebhookInsecureSkipVerify,
 	}
@@ -815,7 +843,7 @@ func (a *API) waitSynchronously(w http.ResponseWriter, r *http.Request, id strin
 		}
 		switch job.Status {
 		case "succeeded":
-			a.writeJobResultArchive(w, job)
+			a.writeJobResult(w, job)
 			return
 		case "failed":
 			writeJSONContentType(w, http.StatusInternalServerError, problem{
@@ -993,7 +1021,74 @@ func (a *API) getJobResult(w http.ResponseWriter, r *http.Request) {
 			"The processed files are available only after the job succeeds.")
 		return
 	}
+	a.writeJobResult(w, job)
+}
+
+func (a *API) writeJobResult(w http.ResponseWriter, job Job) {
+	if job.DirectPDF {
+		a.writeJobResultPDF(w, job)
+		return
+	}
 	a.writeJobResultArchive(w, job)
+}
+
+func (a *API) writeJobResultPDF(w http.ResponseWriter, job Job) {
+	root, err := filepath.EvalSymlinks(a.config.DataRoot)
+	if err != nil {
+		a.logger.Error("could not resolve data root for PDF job result", "job_id", job.ID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	resultDirectory, err := resolveRelative(root, job.OutputPath, true)
+	if err == nil {
+		resultDirectory, err = filepath.EvalSymlinks(resultDirectory)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		writeProblem(w, http.StatusGone, "Job result unavailable", "JOB_RESULT_UNAVAILABLE",
+			"The uploaded job workspace is no longer present on the data volume.")
+		return
+	}
+	if err != nil || !within(root, resultDirectory) {
+		a.logger.Error("PDF job result path is no longer valid", "job_id", job.ID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	pdfPath, err := filepath.EvalSymlinks(filepath.Join(resultDirectory, "input.pdf"))
+	if errors.Is(err, os.ErrNotExist) {
+		writeProblem(w, http.StatusGone, "Job result unavailable", "JOB_RESULT_UNAVAILABLE",
+			"The processed PDF is no longer present in the job workspace.")
+		return
+	}
+	if err != nil || !within(resultDirectory, pdfPath) {
+		a.logger.Error("PDF job result file is no longer valid", "job_id", job.ID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	file, err := os.Open(pdfPath)
+	if err != nil {
+		a.logger.Error("could not open PDF job result", "job_id", job.ID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		a.logger.Error("PDF job result is not a regular file", "job_id", job.ID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", "INTERNAL_ERROR",
+			"The job result could not be read.")
+		return
+	}
+	w.Header().Set("X-Job-ID", job.ID)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, job.ID))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	if _, err := io.Copy(w, file); err != nil {
+		a.logger.Warn("could not send PDF job result", "job_id", job.ID, "error", err)
+	}
 }
 
 func (a *API) writeJobResultArchive(w http.ResponseWriter, job Job) {

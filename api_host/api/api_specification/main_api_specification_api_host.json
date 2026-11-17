@@ -3,7 +3,7 @@
   "info": {
     "title": "Big Batch OCR API",
     "version": "1.0.0",
-    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful output directories can be downloaded by job ID as tar.gz. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. Optional completion webhooks POST the final job status and include the configured rootPath in the JSON body; they may also include X-Webhook-Secret and X-Root-Path headers. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
+    "description": "HTTP API for submitting and tracking OCR batch jobs. Inputs may be uploaded as a tar.gz archive or as one PDF file; directory-based submissions are disabled by default and require ALLOW_DIRECTORY_ACCESS=true. Successful archive jobs return outputs as tar.gz, while direct-PDF jobs return the processed PDF without compression. All directory paths are relative to the API host's configured data root. The API runs the configured OCR container; callers cannot provide arbitrary mounts, Docker options, OCRmyPDF arguments, or host paths. Only the validated language and optimization settings are configurable per job. Optional completion webhooks POST the final job status and include the configured rootPath in the JSON body; they may also include X-Webhook-Secret and X-Root-Path headers. The `/api/v1` URL prefix identifies the major API version. Backward-compatible additions remain in v1; breaking contract changes require a new major URL version."
   },
   "servers": [
     {
@@ -35,47 +35,38 @@
         ],
         "operationId": "submitOcrJob",
         "summary": "Submit an OCR job",
-        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. An optional webhookUrl receives one POST with the final job status after the job reaches a terminal state. webhookSecret and rootPath are optional and require webhookUrl; they are sent as X-Webhook-Secret and X-Root-Path headers, respectively, and rootPath is also included as a rootPath property in the webhook JSON body. Certificate verification is enabled by default for HTTPS webhooks; set webhookInsecureSkipVerify to true to disable it for this job's webhook request when using a trusted self-signed endpoint. Webhook delivery is best-effort, with one request attempt and no retry; callback failures are logged and do not change the job outcome. Synchronous mode waits for the container to finish and returns the resulting tar.gz archive directly, with the job ID in the X-Job-ID response header. Asynchronous mode acknowledges the job and returns a URL for polling its status. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
+        "description": "Submits an OCR job in the requested mode. Optional language and optimize values override the API host's OCR_LANGUAGE and OCR_OPTIMIZE defaults for this job. An optional webhookUrl receives one POST with the final job status after the job reaches a terminal state. webhookSecret and rootPath are optional and require webhookUrl; they are sent as X-Webhook-Secret and X-Root-Path headers, respectively, and rootPath is also included as a rootPath property in the webhook JSON body. Certificate verification is enabled by default for HTTPS webhooks; set webhookInsecureSkipVerify to true to disable it for this job's webhook request when using a trusted self-signed endpoint. Webhook delivery is best-effort, with one request attempt and no retry; callback failures are logged and do not change the job outcome. Synchronous archive submissions return the resulting tar.gz archive directly; direct PDF submissions return the processed PDF as application/pdf. Both include the job ID in the X-Job-ID response header. Asynchronous mode acknowledges the job and returns a URL for polling its status; the result endpoint uses the same output format as the submission. Jobs are queued when the configured concurrency limit is reached. A client disconnect or client-side timeout does not cancel an accepted job; use asynchronous mode when the client cannot wait for completion, and poll the returned status URL rather than resubmitting. If the server's synchronous wait limit is reached, it returns 504 with the accepted job ID and status URL; the job continues. Job metadata is persisted so a host restart cannot report unfinished work as successful.",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/SubmitJobRequest"
+                "$ref": "#/components/schemas/SubmitMultipartJobRequest"
               },
               "examples": {
-                "synchronous": {
-                  "summary": "Wait for OCR completion",
+                "uploadArchiveAsynchronous": {
+                  "summary": "Upload a tar.gz archive and poll for completion",
                   "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "processed/invoices",
-                    "mode": "synchronous"
-                  }
-                },
-                "asynchronous": {
-                  "summary": "Submit and poll for completion",
-                  "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "processed/invoices",
+                    "inputArchive": "(select a local .tar.gz file)",
                     "mode": "asynchronous",
                     "language": "deu+eng",
                     "optimize": 2
                   }
                 },
-                "createMissingDestination": {
-                  "summary": "Explicitly create a missing destination directory",
+                "uploadArchiveSynchronous": {
+                  "summary": "Upload a tar.gz archive and wait for its result",
                   "value": {
-                    "inputPath": "incoming/invoices",
-                    "outputPath": "archive/2026/invoices",
-                    "mode": "asynchronous",
-                    "createDestination": true
+                    "inputArchive": "(select a local .tar.gz file)",
+                    "mode": "synchronous"
+                  }
+                },
+                "uploadPDF": {
+                  "summary": "Upload one PDF directly without compression",
+                  "value": {
+                    "inputPDF": "(select a local .pdf file)",
+                    "mode": "synchronous"
                   }
                 }
-              }
-            },
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/SubmitMultipartJobRequest"
               },
               "encoding": {
                 "inputArchive": {
@@ -83,6 +74,24 @@
                 },
                 "inputArchiveContentsBase64": {
                   "contentType": "text/plain"
+                },
+                "inputPDF": {
+                  "contentType": "application/pdf"
+                }
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitJobRequest"
+              },
+              "examples": {
+                "sharedDirectoryOptIn": {
+                  "summary": "Shared-directory submission (requires ALLOW_DIRECTORY_ACCESS=true)",
+                  "value": {
+                    "inputPath": "incoming/invoices",
+                    "outputPath": "processed/invoices",
+                    "mode": "asynchronous"
+                  }
                 }
               }
             }
@@ -90,7 +99,7 @@
         },
         "responses": {
           "200": {
-            "description": "Synchronous job completed successfully; the response body is its processed output archive.",
+            "description": "Synchronous job completed successfully; archive uploads return a tar.gz archive, while a direct PDF upload returns its processed PDF.",
             "headers": {
               "Content-Disposition": {
                 "description": "Suggested download filename.",
@@ -109,6 +118,12 @@
             },
             "content": {
               "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/pdf": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -158,7 +173,7 @@
             "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
-            "description": "Directory-based submissions are disabled by configuration. Upload an inputArchive instead.",
+            "description": "Directory-based submissions are disabled by configuration. Upload an inputArchive or inputPDF instead.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -565,7 +580,7 @@
         ],
         "operationId": "downloadOcrJobResult",
         "summary": "Download processed files",
-        "description": "Downloads all files in the job's output directory as a tar.gz archive. The result is available only after the job reaches `succeeded`. The archive is generated when requested; downloading does not remove job data and results may be downloaded repeatedly. Use the job DELETE or cleanup endpoint to explicitly remove uploaded-job workspaces.",
+        "description": "Downloads the job result only after it reaches `succeeded`. Archive submissions download all output files as a tar.gz archive; direct-PDF submissions download the processed PDF without compression. Downloading does not remove job data and results may be downloaded repeatedly. Use the job DELETE or cleanup endpoint to explicitly remove uploaded-job workspaces.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -573,7 +588,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Processed output archive.",
+            "description": "Processed output archive or direct PDF, matching the submitted input format.",
             "headers": {
               "Content-Disposition": {
                 "description": "Suggested download filename.",
@@ -592,6 +607,12 @@
             },
             "content": {
               "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/pdf": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -819,17 +840,22 @@
       },
       "SubmitMultipartJobRequest": {
         "type": "object",
-        "description": "Send the form fields as multipart/form-data. Include exactly one input source: inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true), inputArchive as a .tar.gz file part, inputArchiveContents as raw .tar.gz bytes in a multipart text field, or inputArchiveContentsBase64 as standard Base64-encoded .tar.gz bytes in a multipart text field. For archive uploads, omit inputPath and outputPath: the API creates a private workspace named for the job ID with separate input and output directories. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The complete request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
+        "description": "Send the form fields as multipart/form-data. Include exactly one input source: inputPath for the shared-directory workflow (requires ALLOW_DIRECTORY_ACCESS=true), one inputPDF file part, inputArchive as a .tar.gz file part, inputArchiveContents as raw .tar.gz bytes in a multipart text field, or inputArchiveContentsBase64 as standard Base64-encoded .tar.gz bytes in a multipart text field. Direct PDF uploads contain exactly one PDF; omit inputPath and outputPath. For file uploads, the API creates a private workspace named for the job ID with separate input and output directories. Direct PDF submissions return a PDF without compression; archive submissions retain the tar.gz output behavior. The workspace is retained after downloads and cancellation until removed through the job DELETE or cleanup endpoint. The complete request body is limited to 1 GiB and extracted archive contents to 10 GiB. Archive entries must be regular files or directories; links and paths escaping the archive root are rejected.",
         "properties": {
           "inputPath": {
             "type": "string",
             "minLength": 1,
-            "description": "Existing readable input directory beneath the data root; mutually exclusive with all archive fields and accepted only when ALLOW_DIRECTORY_ACCESS=true."
+            "description": "Existing readable input directory beneath the data root; mutually exclusive with file uploads and accepted only when ALLOW_DIRECTORY_ACCESS=true."
           },
           "inputArchive": {
             "type": "string",
             "format": "binary",
-            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath. When present, omit outputPath; the API creates an isolated per-job input/output workspace that remains until explicitly removed with the job DELETE or cleanup endpoint."
+            "description": "A .tar.gz file containing the input files; mutually exclusive with inputPath and the other upload fields. When present, omit outputPath; the API creates an isolated per-job input/output workspace that remains until explicitly removed with the job DELETE or cleanup endpoint."
+          },
+          "inputPDF": {
+            "type": "string",
+            "format": "binary",
+            "description": "One .pdf file, mutually exclusive with inputPath and every archive input field. When present, omit outputPath; synchronous and asynchronous result downloads return the processed PDF without compression."
           },
           "inputArchiveContents": {
             "type": "string",
@@ -886,7 +912,7 @@
           "rootPath": {
             "type": "string",
             "maxLength": 4096,
-            "description": "Optional automation destination root path sent in the X-Root-Path callback header. Requires webhookUrl."
+            "description": "Optional automation destination root path included as rootPath in the webhook JSON body and sent in the X-Root-Path callback header. Requires webhookUrl."
           }
         },
         "required": [
@@ -913,6 +939,11 @@
                 {
                   "required": [
                     "inputArchiveContentsBase64"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputPDF"
                   ]
                 }
               ]
@@ -943,6 +974,11 @@
                   "required": [
                     "inputArchiveContentsBase64"
                   ]
+                },
+                {
+                  "required": [
+                    "inputPDF"
+                  ]
                 }
               ]
             }
@@ -972,6 +1008,11 @@
                   "required": [
                     "inputArchiveContentsBase64"
                   ]
+                },
+                {
+                  "required": [
+                    "inputPDF"
+                  ]
                 }
               ]
             }
@@ -1000,6 +1041,45 @@
                 {
                   "required": [
                     "inputArchiveContents"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputPDF"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "inputPDF"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "inputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputPath"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchive"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContents"
+                  ]
+                },
+                {
+                  "required": [
+                    "inputArchiveContentsBase64"
                   ]
                 }
               ]
